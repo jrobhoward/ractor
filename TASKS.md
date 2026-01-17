@@ -380,7 +380,37 @@ These require changes to ractor core and should be separate PRs:
   - Add `get_message_queue_len()` to ActorCell
   - Enable: message queue monitoring, backpressure detection
 
-### 4.2 Enhanced Introspection APIs (Erlang Parity)
+### 4.2 Investigate DynamicMessage vs ractor_cluster Serialization
+
+**Priority**: Low (future consideration)
+**Status**: Research needed
+
+Currently, `ractor_shell` uses `DynamicMessage` (JSON-based, runtime-typed) for shell-to-actor communication, while `ractor_cluster` uses compile-time binary serialization for network messages. These are fundamentally different approaches:
+
+| Aspect | DynamicMessage | ractor_cluster |
+|--------|----------------|----------------|
+| Type safety | Runtime (JSON) | Compile-time (typed enums) |
+| Serialization | JSON text | Binary (BytesConvertable) |
+| Coupling | Loose (any JSON) | Tight (must know message type) |
+| Use case | Shell debugging | Distributed systems |
+
+**Questions to investigate:**
+- [ ] Could the shell work with cluster-serializable messages instead of requiring DynamicMessage opt-in?
+- [ ] Would a message schema registry (mapping actor names → accepted message types) be feasible?
+- [ ] Could actors expose message type info at runtime for shell introspection?
+- [ ] Is there value in a hybrid approach where actors implement both interfaces?
+
+**Trade-offs:**
+- DynamicMessage provides flexibility for interactive debugging (arbitrary JSON)
+- Cluster serialization provides type safety and efficiency
+- Converging them would add complexity similar to gRPC reflection
+
+**Conclusion from initial investigation:** The current design trades type safety for flexibility, which is appropriate for a debugging tool. However, this should be revisited if:
+1. Users request type-safe shell interactions
+2. A message schema registry becomes useful for other purposes
+3. ractor_cluster gains reflection-like capabilities
+
+### 4.3 Enhanced Introspection APIs (Erlang Parity)
 
 **Estimated Time**: 8-12 hours (requires ractor core PRs)
 
@@ -460,7 +490,7 @@ Inspired by [observer_cli](https://github.com/zhongwencool/observer_cli) and [to
 
 #### Phase 2: Enhanced Metrics (When Core APIs Available)
 
-- [ ] **Add metrics columns (requires Priority 4.2)**
+- [ ] **Add metrics columns (requires Priority 4.3)**
   - Msgs/sec: from `ActorCell::get_messages_processed()`
   - Queue depth: from `ActorCell::get_queue_depth()`
   - Precise uptime: from `ActorCell::get_start_time()`
@@ -555,14 +585,14 @@ Inspired by [observer_cli](https://github.com/zhongwencool/observer_cli) and [to
   - Erlang equivalent: `whereis/1`
 
 - [ ] **Add `links <actor>` command placeholder**
-  - Show what the actor is linked to (when 4.2 API available)
+  - Show what the actor is linked to (when 4.3 API available)
   - Show monitors/monitored_by relationships
   - Gracefully degrade when API not available
 
 - [ ] **Rename `tree` to `pgtree` or clarify documentation**
   - Current `tree` shows process groups, not supervision trees
   - Add note explaining difference from Erlang supervision trees
-  - Alternative: keep `tree` but add `supervtree` when 4.2 available
+  - Alternative: keep `tree` but add `supervtree` when 4.3 available
 
 ### 5.6 Shell UX Improvements
 
@@ -580,6 +610,38 @@ Inspired by [observer_cli](https://github.com/zhongwencool/observer_cli) and [to
 - [ ] **Add `set` command for runtime configuration**
   - `set timeout 10` - change RPC timeout
   - `set refresh 5` - change watch refresh rate
+
+### 5.7 Raft Debugging & Observability ⭐ HIGH PRIORITY
+
+**Estimated Time**: 3-4 hours
+**Value**: HIGH - Essential for observing and debugging Raft cluster behavior
+**Status**: Not started
+
+Currently, Raft messages are invisible in shell tracing because they're tunneled as JSON through `DynamicMessage` via the introspection actor, bypassing ractor_cluster's network-level tracing.
+
+- [ ] **Enable Raft debug logging in shell tracing**
+  - Add tracing instrumentation to Raft message handlers in `raft.rs`
+  - Show RequestVote, VoteResponse, Heartbeat messages in `trace` output
+  - Include term numbers, candidate/leader names, vote decisions
+  - Consider adding a `trace raft` filter or `raft trace` command
+  - File: `ractor_shell/src/raft.rs` (lines 296-362 handle incoming messages)
+
+- [ ] **Add command to trigger fresh leader election**
+  - New shell command: `raft election` or `raft stepdown`
+  - Forces current leader to step down, triggering new election
+  - Useful for observing election protocol in action
+  - Implementation: Send a `DynamicMessage` to raft_node with `{"command": "stepdown"}` or similar
+  - Add handler in `raft.rs` to transition leader → follower and clear election state
+  - Alternative: `raft kill-leader` to stop the leader actor entirely
+
+- [ ] **Add `raft status` command enhancements**
+  - Show current term, voted_for, election generation
+  - Show peer connection status (connected/disconnected)
+  - Show time since last heartbeat received
+  - Show vote tally during elections
+
+**Why this matters:**
+Without these features, debugging Raft behavior requires reading log files. The shell should provide real-time visibility into the consensus protocol, especially for educational/demo purposes.
 
 ---
 
@@ -599,11 +661,11 @@ Reference for future development priorities:
 | Message sending | `send`, `call` | Direct calls | ✅ DynamicMessage only |
 | **Top/Dashboard TUI** | `top` | observer_cli | ✅ Phase 1 Complete |
 | Message queue depth | - | `message_queue_len` | ❌ Needs core API (4.1) |
-| Supervision trees | `tree` (pg only) | Observer supervision view | ⚠️ Needs core API (4.2) |
-| Link inspection | - | `links`, `monitors` | ❌ Needs core API (4.2) |
+| Supervision trees | `tree` (pg only) | Observer supervision view | ⚠️ Needs core API (4.3) |
+| Link inspection | - | `links`, `monitors` | ❌ Needs core API (4.3) |
 | **Tracing** | `trace`, `trace-to-file` | `dbg`, trace BIFs | ✅ Complete |
 | Live refresh (simple) | `watch` | - | ❌ Planned (5.3) |
-| Memory/reductions | - | `memory`, `reductions` | ❌ Needs core API (4.2) |
+| Memory/reductions | - | `memory`, `reductions` | ❌ Needs core API (4.3) |
 
 ---
 
@@ -721,14 +783,16 @@ From analyzing ractor codebase:
   - 5.4 Network Diagnostics: 3-4 hours (MEDIUM value)
   - 5.5 Enhanced Inspection: 2-3 hours (LOW-MEDIUM value)
   - 5.6 UX Improvements: 2-3 hours (LOW value)
+  - **5.7 Raft Debugging & Observability: 3-4 hours (HIGH value)**
 
 **Recommended for initial PR**: Priority 1 + 2 = ✅ Complete
 
 **Recommended next steps (post-PR)**:
 1. ✅ **Priority 5.1 (`top` command) Phase 1** - Complete
 2. ✅ **Priority 5.2 (Tracing)** - Complete
-3. Priority 5.3 (Simple Watch Mode) - Lightweight auto-refresh without TUI
-4. Priority 4.1 (Core APIs) - Unlocks metrics for `top` Phases 2-3
+3. **Priority 5.7 (Raft Debugging)** - Enable Raft message tracing and election triggering
+4. Priority 5.3 (Simple Watch Mode) - Lightweight auto-refresh without TUI
+5. Priority 4.1 (Core APIs) - Unlocks metrics for `top` Phases 2-3
 
 ---
 

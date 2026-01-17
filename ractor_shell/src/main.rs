@@ -2,10 +2,11 @@ use anyhow::Result;
 use clap::{Parser, ValueEnum};
 use colored::Colorize;
 use rustyline::error::ReadlineError;
-use rustyline::DefaultEditor;
+use rustyline::{Config, Editor};
 use std::io::IsTerminal;
 use std::process::ExitCode;
 
+use ractor_shell::completer::{get_known_process_groups, update_completer_state, ShellHelper};
 use ractor_shell::config::ShellConfig;
 use ractor_shell::{ShellCommand, ShellState};
 
@@ -182,8 +183,16 @@ async fn run() -> Result<ExitCode> {
         }
     }
 
-    // Set up readline editor with history
-    let mut rl = DefaultEditor::new()?;
+    // Set up readline editor with configuration
+    let rl_config = Config::builder()
+        .edit_mode(config.get_edit_mode())
+        .completion_type(config.get_completion_type())
+        .build();
+
+    let helper = ShellHelper::new();
+    let mut rl = Editor::with_config(rl_config)?;
+    rl.set_helper(Some(helper));
+
     let history_path = config.history_path();
 
     // Load history if it exists
@@ -193,6 +202,14 @@ async fn run() -> Result<ExitCode> {
 
     // Main REPL loop
     loop {
+        // Update completer with current state before each prompt
+        if let Some(helper) = rl.helper_mut() {
+            let actor_names = ractor::registry::registered();
+            let process_groups = get_known_process_groups();
+            let node_names = state.connected_nodes.keys().cloned().collect();
+            update_completer_state(helper, actor_names, process_groups, node_names);
+        }
+
         let prompt = state.build_prompt();
 
         match rl.readline(&prompt) {

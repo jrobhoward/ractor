@@ -54,6 +54,12 @@ pub struct ShellConfig {
 
     /// Color mode: "auto", "always", or "never"
     pub color: Option<String>,
+
+    /// Edit mode: "vi" (default) or "emacs"
+    pub edit_mode: Option<String>,
+
+    /// Completion type: "list" (default) or "circular"
+    pub completion_type: Option<String>,
 }
 
 impl ShellConfig {
@@ -127,6 +133,24 @@ impl ShellConfig {
         }
     }
 
+    /// Get the edit mode setting
+    /// Returns Vi mode by default, Emacs if explicitly configured
+    pub fn get_edit_mode(&self) -> rustyline::EditMode {
+        match self.edit_mode.as_deref() {
+            Some("emacs") => rustyline::EditMode::Emacs,
+            _ => rustyline::EditMode::Vi, // "vi" or unset defaults to Vi
+        }
+    }
+
+    /// Get the completion type setting
+    /// Returns List by default (shows all matches), Circular if explicitly configured
+    pub fn get_completion_type(&self) -> rustyline::config::CompletionType {
+        match self.completion_type.as_deref() {
+            Some("circular") => rustyline::config::CompletionType::Circular,
+            _ => rustyline::config::CompletionType::List, // "list" or unset defaults to List
+        }
+    }
+
     /// Create a sample configuration file content
     pub fn sample_config() -> &'static str {
         r#"# Ractor Shell Configuration
@@ -152,6 +176,14 @@ impl ShellConfig {
 
 # Maximum history entries (default: 1000)
 # max_history = 1000
+
+# Edit mode: "vi" (default) or "emacs"
+# edit_mode = "vi"
+
+# Tab completion type: "list" (default) or "circular"
+#   list     - shows all matching completions below the prompt
+#   circular - cycles through completions with repeated tabs
+# completion_type = "list"
 "#
     }
 }

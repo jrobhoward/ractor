@@ -1,8 +1,9 @@
 use colored::Colorize;
 use ractor::{Actor, ActorProcessingErr, ActorRef};
 use ractor_shell::completer::{get_known_process_groups, update_completer_state, ShellHelper};
+use ractor_shell::config::ShellConfig;
 use ractor_shell::{ShellCommand, ShellState};
-use rustyline::Editor;
+use rustyline::{Config, Editor};
 
 // Simple demo actor
 struct DemoActor;
@@ -79,9 +80,15 @@ async fn main() -> anyhow::Result<()> {
     // Initialize shell
     let mut state = ShellState::new().await?;
 
-    // Create editor with tab completion
+    // Load config and create editor with vi mode + list completion
+    let config = ShellConfig::load();
+    let rl_config = Config::builder()
+        .edit_mode(config.get_edit_mode())
+        .completion_type(config.get_completion_type())
+        .build();
+
     let helper = ShellHelper::new();
-    let mut rl = Editor::new()?;
+    let mut rl = Editor::with_config(rl_config)?;
     rl.set_helper(Some(helper));
 
     // REPL loop

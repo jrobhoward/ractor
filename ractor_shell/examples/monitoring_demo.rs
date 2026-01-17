@@ -21,8 +21,9 @@
 use anyhow::Result;
 use ractor::{Actor, ActorProcessingErr, ActorRef};
 use ractor_shell::completer::{get_known_process_groups, update_completer_state, ShellHelper};
+use ractor_shell::config::ShellConfig;
 use ractor_shell::{ShellCommand, ShellState};
-use rustyline::Editor;
+use rustyline::{Config, Editor};
 use serde::{Deserialize, Serialize};
 
 /// Simple demo actor that can handle basic messages
@@ -152,9 +153,15 @@ async fn main() -> Result<()> {
     println!("  stop demo_actor_1");
     println!();
 
-    // Setup rustyline with tab completion
+    // Load config and create editor with vi mode + list completion
+    let config = ShellConfig::load();
+    let rl_config = Config::builder()
+        .edit_mode(config.get_edit_mode())
+        .completion_type(config.get_completion_type())
+        .build();
+
     let helper = ShellHelper::new();
-    let mut rl = Editor::new()?;
+    let mut rl = Editor::with_config(rl_config)?;
     rl.set_helper(Some(helper));
 
     // Load history
