@@ -112,6 +112,53 @@ async fn main() -> anyhow::Result<()> {
 }
 ```
 
+## Testing with Multiple Nodes
+
+For testing cluster connectivity and distributed features, use the provided test script:
+
+### Automated Test Cluster
+
+```bash
+# Start 2 cluster nodes + interactive shell
+./scripts/test_cluster.sh
+
+# Start 3 nodes + shell
+./scripts/test_cluster.sh --nodes 3
+
+# Start nodes only (for manual testing)
+./scripts/test_cluster.sh --no-shell
+```
+
+The script automatically:
+- Builds the required examples
+- Starts N cluster nodes on sequential ports (9002, 9003, ...)
+- Logs each node's output to `/tmp/ractor_node_*.log`
+- Starts the interactive shell with connection instructions
+- Cleans up all nodes on exit (Ctrl+C)
+
+### Manual Multi-Node Testing
+
+```bash
+# Terminal 1: Start node_a
+cargo run --example cluster_node -p ractor_shell -- --port 9002 --name node_a
+
+# Terminal 2: Start node_b
+cargo run --example cluster_node -p ractor_shell -- --port 9003 --name node_b
+
+# Terminal 3: Start the shell
+cargo run --example demo -p ractor_shell
+
+# In the shell:
+ractor@local > connect 127.0.0.1:9002
+ractor@local > connect 127.0.0.1:9003
+ractor@local > nodes
+ractor@local > use 127.0.0.1:9002
+ractor@127.0.0.1:9002 > registry
+ractor@127.0.0.1:9002 > pg members workers
+ractor@127.0.0.1:9002 > call worker_1 {"command": "status"}
+ractor@127.0.0.1:9002 > cluster
+```
+
 ## Features
 
 ### ✅ Implemented (Phases 1, 2, 4, 5, 6, 7)
