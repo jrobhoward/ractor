@@ -179,27 +179,21 @@ cargo run --example dynamic_actor -p ractor_shell
 cargo run --example monitoring_demo -p ractor_shell
 ```
 
-## Migration from ractor_experiments
+## Using ractor_shell
 
-If you were using `ractor_experiments/ractor_shell`, update your dependencies:
+Add ractor_shell to your dependencies:
 
 ```toml
-# Old (ractor_experiments)
 [dependencies]
-ractor = "0.15"
-ractor_shell = { path = "path/to/ractor_experiments/ractor_shell" }
-
-# New (integrated fork)
-[dependencies]
-ractor = { git = "https://github.com/YOUR_ORG/ractor", branch = "feature/shell", features = ["cluster", "blanket_serde"] }
-ractor_shell = { git = "https://github.com/YOUR_ORG/ractor", branch = "feature/shell" }
+ractor = { path = "../ractor", features = ["cluster", "blanket_serde"] }
+ractor_shell = { path = "../ractor_shell" }
 ```
 
-Or if using local path:
+Or using workspace:
 ```toml
 [dependencies]
-ractor = { path = "../ractor/ractor", features = ["cluster", "blanket_serde"] }
-ractor_shell = { path = "../ractor/ractor_shell" }
+ractor.workspace = true
+ractor_shell.workspace = true
 ```
 
 ## Documentation
@@ -208,7 +202,6 @@ ractor_shell = { path = "../ractor/ractor_shell" }
 - **ractor_shell/DYNAMIC_MESSAGES.md**: Guide for dynamic message interface
 - **ractor_shell/MONITORING.md**: Actor monitoring guide
 - **ractor_shell/UX_FEATURES.md**: Tab completion and aliases
-- **FORK_INTEGRATION_PLAN.md**: Full integration roadmap (in ractor_experiments)
 
 ## Contributing
 

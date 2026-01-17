@@ -24,7 +24,6 @@ use ractor_shell::completer::{get_known_process_groups, update_completer_state, 
 use ractor_shell::{ShellCommand, ShellState};
 use rustyline::Editor;
 use serde::{Deserialize, Serialize};
-use tokio;
 
 /// Simple demo actor that can handle basic messages
 pub struct DemoActor {
@@ -129,12 +128,9 @@ async fn main() -> Result<()> {
     println!("Spawning demo actors...");
     for i in 1..=3 {
         let name = format!("demo_actor_{}", i);
-        let actor = DemoActor {
-            name: name.clone(),
-        };
+        let actor = DemoActor { name: name.clone() };
 
-        let (_actor_ref, _handle) =
-            Actor::spawn(Some(name.clone()), actor, name.clone()).await?;
+        let (_actor_ref, _handle) = Actor::spawn(Some(name.clone()), actor, name.clone()).await?;
     }
 
     // Spawn a panicky actor

@@ -44,12 +44,8 @@ impl ShellState {
         );
 
         // Spawn monitor actor
-        let (monitor_ref, _) = Actor::spawn(
-            Some("shell_monitor".to_string()),
-            monitor::MonitorActor,
-            (),
-        )
-        .await?;
+        let (monitor_ref, _) =
+            Actor::spawn(Some("shell_monitor".to_string()), monitor::MonitorActor, ()).await?;
 
         Ok(Self {
             should_exit: false,
@@ -245,23 +241,37 @@ impl ShellState {
             println!("  {}       Show process group tree", "tree".green());
             println!();
             println!("{}", "  Actor Monitoring:".bright_black());
-            println!("  {}    Start monitoring actor events", "monitor <actor>".green());
-            println!("  {}  Stop monitoring an actor", "unmonitor <actor>".green());
+            println!(
+                "  {}    Start monitoring actor events",
+                "monitor <actor>".green()
+            );
+            println!(
+                "  {}  Stop monitoring an actor",
+                "unmonitor <actor>".green()
+            );
             println!("  {}          List monitored actors", "monitors".green());
             println!();
             println!("  {}              Exit the shell", "exit".green());
             println!();
             println!("{}", "  Shell Features:".bright_black());
-            println!("  {} Use TAB to auto-complete commands, actors, and groups", "•".bright_cyan());
-            println!("  {} Command history with UP/DOWN arrows", "•".bright_cyan());
-            println!("  {} Aliases: {}, {}, {}, {}, {}, {}",
-                     "•".bright_cyan(),
-                     "a=actors".bright_black(),
-                     "r=registry".bright_black(),
-                     "i=info".bright_black(),
-                     "s=send".bright_black(),
-                     "c=call".bright_black(),
-                     "q=quit".bright_black());
+            println!(
+                "  {} Use TAB to auto-complete commands, actors, and groups",
+                "•".bright_cyan()
+            );
+            println!(
+                "  {} Command history with UP/DOWN arrows",
+                "•".bright_cyan()
+            );
+            println!(
+                "  {} Aliases: {}, {}, {}, {}, {}, {}",
+                "•".bright_cyan(),
+                "a=actors".bright_black(),
+                "r=registry".bright_black(),
+                "i=info".bright_black(),
+                "s=send".bright_black(),
+                "c=call".bright_black(),
+                "q=quit".bright_black()
+            );
             println!();
             println!("Type 'help <command>' for more information on a specific command");
         }
@@ -289,7 +299,7 @@ impl ShellState {
             if let Some(introspection_ref) = self.connected_nodes.get(node_name) {
                 let result = introspection_ref
                     .call(
-                        |reply| ShellProtocolMessage::ListRegisteredActors(reply),
+                        ShellProtocolMessage::ListRegisteredActors,
                         Some(tokio::time::Duration::from_secs(5)),
                     )
                     .await?;
@@ -355,7 +365,7 @@ impl ShellState {
             if let Some(introspection_ref) = self.connected_nodes.get(node_name) {
                 let result = introspection_ref
                     .call(
-                        |reply| ShellProtocolMessage::ListRegisteredActors(reply),
+                        ShellProtocolMessage::ListRegisteredActors,
                         Some(tokio::time::Duration::from_secs(5)),
                     )
                     .await?;
@@ -980,7 +990,7 @@ impl ShellState {
             // Test with a ping
             let pong_result = introspection_ref
                 .call(
-                    |reply| ShellProtocolMessage::Ping(reply),
+                    ShellProtocolMessage::Ping,
                     Some(tokio::time::Duration::from_secs(5)),
                 )
                 .await?;
@@ -1011,7 +1021,7 @@ impl ShellState {
             println!("  Discovering cluster topology...");
             let topo_result = introspection_ref
                 .call(
-                    |reply| ShellProtocolMessage::GetClusterTopology(reply),
+                    ShellProtocolMessage::GetClusterTopology,
                     Some(tokio::time::Duration::from_secs(5)),
                 )
                 .await?;
@@ -1114,7 +1124,7 @@ impl ShellState {
         println!("{}", "Fetching cluster topology...".bright_black());
         let result = introspection_ref
             .call(
-                |reply| ShellProtocolMessage::GetClusterTopology(reply),
+                ShellProtocolMessage::GetClusterTopology,
                 Some(tokio::time::Duration::from_secs(5)),
             )
             .await?;
@@ -1286,7 +1296,7 @@ impl ShellState {
                 // Get actor count via registry
                 let result = introspection_ref
                     .call(
-                        |reply| ShellProtocolMessage::ListRegisteredActors(reply),
+                        ShellProtocolMessage::ListRegisteredActors,
                         Some(tokio::time::Duration::from_secs(5)),
                     )
                     .await?;
@@ -1486,9 +1496,7 @@ impl ShellState {
 
     async fn cmd_monitor(&self, actor: String) -> Result<()> {
         if let Some(monitor_ref) = &self.monitor_actor {
-            monitor_ref.cast(monitor::MonitorMessage::Monitor {
-                actor_name: actor,
-            })?;
+            monitor_ref.cast(monitor::MonitorMessage::Monitor { actor_name: actor })?;
         } else {
             println!("{} Monitor system not available", "✗".red());
         }
@@ -1497,9 +1505,7 @@ impl ShellState {
 
     async fn cmd_unmonitor(&self, actor: String) -> Result<()> {
         if let Some(monitor_ref) = &self.monitor_actor {
-            monitor_ref.cast(monitor::MonitorMessage::Unmonitor {
-                actor_name: actor,
-            })?;
+            monitor_ref.cast(monitor::MonitorMessage::Unmonitor { actor_name: actor })?;
         } else {
             println!("{} Monitor system not available", "✗".red());
         }

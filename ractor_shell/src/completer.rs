@@ -154,7 +154,11 @@ impl Completer for ShellHelper {
 
         // Complete subcommands or arguments based on the command
         let current_word = parts.last().copied().unwrap_or("");
-        let current_word = if line.ends_with(' ') { "" } else { current_word };
+        let current_word = if line.ends_with(' ') {
+            ""
+        } else {
+            current_word
+        };
 
         match first_word {
             "pg" => {
@@ -197,8 +201,8 @@ impl Completer for ShellHelper {
                     return Ok((word_start, candidates));
                 }
             }
-            "info" | "stop" | "send" | "call" | "send-file" | "sendfile" | "monitor" | "unmonitor"
-            | "i" | "s" | "c" | "sf" => {
+            "info" | "stop" | "send" | "call" | "send-file" | "sendfile" | "monitor"
+            | "unmonitor" | "i" | "s" | "c" | "sf" => {
                 // Complete actor names
                 let candidates: Vec<Pair> = self
                     .actor_names
@@ -337,7 +341,13 @@ mod tests {
     #[test]
     fn test_command_completion() {
         let helper = ShellHelper::new();
-        let (pos, candidates) = helper.complete("he", 2, &Context::new(&rustyline::history::DefaultHistory::new())).unwrap();
+        let (pos, candidates) = helper
+            .complete(
+                "he",
+                2,
+                &Context::new(&rustyline::history::DefaultHistory::new()),
+            )
+            .unwrap();
 
         assert_eq!(pos, 0);
         assert!(candidates.iter().any(|c| c.display == "help"));
@@ -346,7 +356,13 @@ mod tests {
     #[test]
     fn test_pg_subcommand_completion() {
         let helper = ShellHelper::new();
-        let (pos, candidates) = helper.complete("pg m", 4, &Context::new(&rustyline::history::DefaultHistory::new())).unwrap();
+        let (_pos, candidates) = helper
+            .complete(
+                "pg m",
+                4,
+                &Context::new(&rustyline::history::DefaultHistory::new()),
+            )
+            .unwrap();
 
         assert!(candidates.iter().any(|c| c.display == "members"));
     }

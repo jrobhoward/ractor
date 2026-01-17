@@ -50,10 +50,7 @@ impl Actor for IntrospectionActor {
 
             ShellProtocolMessage::GetProcessGroupMembers(group, reply) => {
                 let members = ractor::pg::get_members(&group);
-                let actors: Vec<ActorInfo> = members
-                    .iter()
-                    .map(|cell| ActorInfo::from_cell(cell))
-                    .collect();
+                let actors: Vec<ActorInfo> = members.iter().map(ActorInfo::from_cell).collect();
 
                 let _ = reply.send(actors);
             }

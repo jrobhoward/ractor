@@ -6,7 +6,6 @@ use serde_json::Value;
 /// This module handles parsing user input into actor messages.
 /// Due to Ractor's strongly-typed message system, we focus on
 /// well-known message types that can be serialized.
-
 /// Attempt to parse a JSON string into a structured value
 pub fn parse_json_input(input: &str) -> Result<Value> {
     // Try to parse as JSON first

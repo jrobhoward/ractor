@@ -383,4 +383,4 @@ This is an experimental project. See [REPL_PLANNING.md](../REPL_PLANNING.md) for
 
 ## License
 
-Same as ractor_experiments parent project.
+Same as ractor parent project (MIT).

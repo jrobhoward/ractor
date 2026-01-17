@@ -2,10 +2,10 @@
 //!
 //! Provides functionality to monitor actor lifecycle events similar to Erlang's process monitoring.
 
+use chrono::Local;
+use colored::Colorize;
 use ractor::{Actor, ActorProcessingErr, ActorRef, SupervisionEvent};
 use std::collections::HashMap;
-use colored::Colorize;
-use chrono::Local;
 
 /// Events that can be monitored
 #[derive(Debug, Clone)]
@@ -42,7 +42,11 @@ impl MonitorEvent {
     /// Format event for display
     pub fn format(&self) -> String {
         match self {
-            MonitorEvent::ActorStarted { actor_id, actor_name, timestamp } => {
+            MonitorEvent::ActorStarted {
+                actor_id,
+                actor_name,
+                timestamp,
+            } => {
                 let time = timestamp.format("%H:%M:%S%.3f");
                 let name = actor_name.as_deref().unwrap_or("unnamed");
                 format!(
@@ -54,7 +58,12 @@ impl MonitorEvent {
                     format!("({})", actor_id).bright_black()
                 )
             }
-            MonitorEvent::ActorStopped { actor_id, actor_name, reason, timestamp } => {
+            MonitorEvent::ActorStopped {
+                actor_id,
+                actor_name,
+                reason,
+                timestamp,
+            } => {
                 let time = timestamp.format("%H:%M:%S%.3f");
                 let name = actor_name.as_deref().unwrap_or("unnamed");
                 format!(
@@ -67,7 +76,12 @@ impl MonitorEvent {
                     reason.bright_black()
                 )
             }
-            MonitorEvent::ActorPanicked { actor_id, actor_name, error, timestamp } => {
+            MonitorEvent::ActorPanicked {
+                actor_id,
+                actor_name,
+                error,
+                timestamp,
+            } => {
                 let time = timestamp.format("%H:%M:%S%.3f");
                 let name = actor_name.as_deref().unwrap_or("unnamed");
                 format!(
@@ -80,7 +94,11 @@ impl MonitorEvent {
                     error.red()
                 )
             }
-            MonitorEvent::ActorKilled { actor_id, actor_name, timestamp } => {
+            MonitorEvent::ActorKilled {
+                actor_id,
+                actor_name,
+                timestamp,
+            } => {
                 let time = timestamp.format("%H:%M:%S%.3f");
                 let name = actor_name.as_deref().unwrap_or("unnamed");
                 format!(
@@ -100,13 +118,9 @@ impl MonitorEvent {
 #[derive(Debug)]
 pub enum MonitorMessage {
     /// Start monitoring an actor
-    Monitor {
-        actor_name: String,
-    },
+    Monitor { actor_name: String },
     /// Stop monitoring an actor
-    Unmonitor {
-        actor_name: String,
-    },
+    Unmonitor { actor_name: String },
     /// Report an event
     Event(MonitorEvent),
     /// Get list of monitored actors

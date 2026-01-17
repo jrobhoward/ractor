@@ -98,7 +98,7 @@ pub enum CallResponse {
 pub async fn supports_dynamic_messages(actor_ref: ractor::ActorRef<DynamicMessage>) -> bool {
     match actor_ref
         .call(
-            |reply| DynamicMessage::Ping(reply),
+            DynamicMessage::Ping,
             Some(tokio::time::Duration::from_millis(500)),
         )
         .await
@@ -115,7 +115,6 @@ mod tests {
 
     struct TestActor;
 
-    #[async_trait::async_trait]
     impl Actor for TestActor {
         type Msg = DynamicMessage;
         type State = ();

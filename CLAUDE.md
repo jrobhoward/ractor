@@ -20,6 +20,16 @@ This is a Cargo workspace with multiple crates:
 
 ## Build and Test Commands
 
+### Standard Build
+
+```bash
+# Build default workspace members (ractor, ractor_cluster, ractor_cluster_derive)
+cargo build
+
+# Build all workspace members including optional ones
+cargo build --workspace
+```
+
 ### Building ractor_shell (Optional)
 
 The ractor_shell is an interactive REPL for debugging actor systems, inspired by Erlang's `erl` shell. It is **NOT** built by default.

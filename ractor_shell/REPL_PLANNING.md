@@ -904,7 +904,7 @@ Goodbye!
 
 ## 9. Next Steps
 
-1. **Create `ractor_shell` crate** in ractor_experiments (local first)
+1. **Create `ractor_shell` crate** as workspace member
 2. **Implement Phase 1** commands with local-only scope
 3. **Design `IntrospectionActor`** protocol
 4. **Propose ractor core changes** for actor enumeration

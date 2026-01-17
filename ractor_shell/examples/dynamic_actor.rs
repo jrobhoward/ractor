@@ -1,6 +1,6 @@
 use colored::Colorize;
 use ractor::{Actor, ActorProcessingErr, ActorRef};
-use ractor_shell::completer::{ShellHelper, get_known_process_groups, update_completer_state};
+use ractor_shell::completer::{get_known_process_groups, update_completer_state, ShellHelper};
 use ractor_shell::dynamic::{CallResponse, DynamicMessage};
 use ractor_shell::{ShellCommand, ShellState};
 use rustyline::Editor;
