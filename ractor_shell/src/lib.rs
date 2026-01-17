@@ -1808,3 +1808,411 @@ impl ShellCommand {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ==================== Command Parsing Tests ====================
+
+    #[test]
+    fn test_parse_empty_line() {
+        let result = ShellCommand::parse_line("");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Empty command"));
+    }
+
+    #[test]
+    fn test_parse_whitespace_only() {
+        let result = ShellCommand::parse_line("   ");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_unknown_command() {
+        let result = ShellCommand::parse_line("foobar");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Unknown command"));
+    }
+
+    // Basic commands without arguments
+    #[test]
+    fn test_parse_actors() {
+        let cmd = ShellCommand::parse_line("actors").unwrap();
+        assert!(matches!(cmd, ShellCommand::Actors));
+    }
+
+    #[test]
+    fn test_parse_registry() {
+        let cmd = ShellCommand::parse_line("registry").unwrap();
+        assert!(matches!(cmd, ShellCommand::Registry));
+    }
+
+    #[test]
+    fn test_parse_nodes() {
+        let cmd = ShellCommand::parse_line("nodes").unwrap();
+        assert!(matches!(cmd, ShellCommand::Nodes));
+    }
+
+    #[test]
+    fn test_parse_stats() {
+        let cmd = ShellCommand::parse_line("stats").unwrap();
+        assert!(matches!(cmd, ShellCommand::Stats));
+    }
+
+    #[test]
+    fn test_parse_monitors() {
+        let cmd = ShellCommand::parse_line("monitors").unwrap();
+        assert!(matches!(cmd, ShellCommand::Monitors));
+    }
+
+    #[test]
+    fn test_parse_exit() {
+        let cmd = ShellCommand::parse_line("exit").unwrap();
+        assert!(matches!(cmd, ShellCommand::Exit));
+    }
+
+    #[test]
+    fn test_parse_quit() {
+        let cmd = ShellCommand::parse_line("quit").unwrap();
+        assert!(matches!(cmd, ShellCommand::Exit));
+    }
+
+    // Commands with arguments
+    #[test]
+    fn test_parse_help_no_arg() {
+        let cmd = ShellCommand::parse_line("help").unwrap();
+        match cmd {
+            ShellCommand::Help { command } => assert!(command.is_none()),
+            _ => panic!("Expected Help command"),
+        }
+    }
+
+    #[test]
+    fn test_parse_help_with_arg() {
+        let cmd = ShellCommand::parse_line("help actors").unwrap();
+        match cmd {
+            ShellCommand::Help { command } => assert_eq!(command, Some("actors".to_string())),
+            _ => panic!("Expected Help command"),
+        }
+    }
+
+    #[test]
+    fn test_parse_info() {
+        let cmd = ShellCommand::parse_line("info my_actor").unwrap();
+        match cmd {
+            ShellCommand::Info { actor } => assert_eq!(actor, "my_actor"),
+            _ => panic!("Expected Info command"),
+        }
+    }
+
+    #[test]
+    fn test_parse_info_missing_arg() {
+        let result = ShellCommand::parse_line("info");
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("requires an actor name"));
+    }
+
+    #[test]
+    fn test_parse_stop() {
+        let cmd = ShellCommand::parse_line("stop my_actor").unwrap();
+        match cmd {
+            ShellCommand::Stop { actor } => assert_eq!(actor, "my_actor"),
+            _ => panic!("Expected Stop command"),
+        }
+    }
+
+    #[test]
+    fn test_parse_send() {
+        let cmd = ShellCommand::parse_line(r#"send my_actor {"cmd": "ping"}"#).unwrap();
+        match cmd {
+            ShellCommand::Send { actor, message } => {
+                assert_eq!(actor, "my_actor");
+                assert_eq!(message, r#"{"cmd": "ping"}"#);
+            }
+            _ => panic!("Expected Send command"),
+        }
+    }
+
+    #[test]
+    fn test_parse_send_multiword_message() {
+        let cmd = ShellCommand::parse_line("send actor hello world").unwrap();
+        match cmd {
+            ShellCommand::Send { actor, message } => {
+                assert_eq!(actor, "actor");
+                assert_eq!(message, "hello world");
+            }
+            _ => panic!("Expected Send command"),
+        }
+    }
+
+    #[test]
+    fn test_parse_send_missing_args() {
+        let result = ShellCommand::parse_line("send actor");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_call() {
+        let cmd = ShellCommand::parse_line(r#"call my_actor {"cmd": "get"}"#).unwrap();
+        match cmd {
+            ShellCommand::Call { actor, message } => {
+                assert_eq!(actor, "my_actor");
+                assert_eq!(message, r#"{"cmd": "get"}"#);
+            }
+            _ => panic!("Expected Call command"),
+        }
+    }
+
+    #[test]
+    fn test_parse_connect() {
+        let cmd = ShellCommand::parse_line("connect localhost:9000").unwrap();
+        match cmd {
+            ShellCommand::Connect { host } => assert_eq!(host, "localhost:9000"),
+            _ => panic!("Expected Connect command"),
+        }
+    }
+
+    #[test]
+    fn test_parse_disconnect() {
+        let cmd = ShellCommand::parse_line("disconnect node_a").unwrap();
+        match cmd {
+            ShellCommand::Disconnect { node } => assert_eq!(node, "node_a"),
+            _ => panic!("Expected Disconnect command"),
+        }
+    }
+
+    #[test]
+    fn test_parse_use() {
+        let cmd = ShellCommand::parse_line("use node_b").unwrap();
+        match cmd {
+            ShellCommand::Use { node } => assert_eq!(node, "node_b"),
+            _ => panic!("Expected Use command"),
+        }
+    }
+
+    #[test]
+    fn test_parse_use_local() {
+        let cmd = ShellCommand::parse_line("use local").unwrap();
+        match cmd {
+            ShellCommand::Use { node } => assert_eq!(node, "local"),
+            _ => panic!("Expected Use command"),
+        }
+    }
+
+    // pg subcommands
+    #[test]
+    fn test_parse_pg_list() {
+        let cmd = ShellCommand::parse_line("pg list").unwrap();
+        assert!(matches!(cmd, ShellCommand::PgList));
+    }
+
+    #[test]
+    fn test_parse_pg_members() {
+        let cmd = ShellCommand::parse_line("pg members my_group").unwrap();
+        match cmd {
+            ShellCommand::PgMembers { group } => assert_eq!(group, "my_group"),
+            _ => panic!("Expected PgMembers command"),
+        }
+    }
+
+    #[test]
+    fn test_parse_pg_missing_subcommand() {
+        let result = ShellCommand::parse_line("pg");
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("requires a subcommand"));
+    }
+
+    #[test]
+    fn test_parse_pg_members_missing_group() {
+        let result = ShellCommand::parse_line("pg members");
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("requires a group name"));
+    }
+
+    #[test]
+    fn test_parse_pg_unknown_subcommand() {
+        let result = ShellCommand::parse_line("pg foobar");
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Unknown pg subcommand"));
+    }
+
+    // cluster command
+    #[test]
+    fn test_parse_cluster_no_subcommand() {
+        let cmd = ShellCommand::parse_line("cluster").unwrap();
+        match cmd {
+            ShellCommand::Cluster { subcommand } => assert!(subcommand.is_none()),
+            _ => panic!("Expected Cluster command"),
+        }
+    }
+
+    #[test]
+    fn test_parse_cluster_with_subcommand() {
+        let cmd = ShellCommand::parse_line("cluster nodes").unwrap();
+        match cmd {
+            ShellCommand::Cluster { subcommand } => {
+                assert_eq!(subcommand, Some("nodes".to_string()))
+            }
+            _ => panic!("Expected Cluster command"),
+        }
+    }
+
+    // tree command
+    #[test]
+    fn test_parse_tree_no_arg() {
+        let cmd = ShellCommand::parse_line("tree").unwrap();
+        match cmd {
+            ShellCommand::Tree { actor } => assert!(actor.is_none()),
+            _ => panic!("Expected Tree command"),
+        }
+    }
+
+    #[test]
+    fn test_parse_tree_with_actor() {
+        let cmd = ShellCommand::parse_line("tree my_actor").unwrap();
+        match cmd {
+            ShellCommand::Tree { actor } => assert_eq!(actor, Some("my_actor".to_string())),
+            _ => panic!("Expected Tree command"),
+        }
+    }
+
+    // File commands
+    #[test]
+    fn test_parse_send_file() {
+        let cmd = ShellCommand::parse_line("send-file actor /path/to/file.json").unwrap();
+        match cmd {
+            ShellCommand::SendFile { actor, file_path } => {
+                assert_eq!(actor, "actor");
+                assert_eq!(file_path, "/path/to/file.json");
+            }
+            _ => panic!("Expected SendFile command"),
+        }
+    }
+
+    #[test]
+    fn test_parse_sendfile_alt() {
+        let cmd = ShellCommand::parse_line("sendfile actor file.json").unwrap();
+        match cmd {
+            ShellCommand::SendFile { actor, file_path } => {
+                assert_eq!(actor, "actor");
+                assert_eq!(file_path, "file.json");
+            }
+            _ => panic!("Expected SendFile command"),
+        }
+    }
+
+    #[test]
+    fn test_parse_load() {
+        let cmd = ShellCommand::parse_line("load /path/to/script.sh").unwrap();
+        match cmd {
+            ShellCommand::Load { script_path } => assert_eq!(script_path, "/path/to/script.sh"),
+            _ => panic!("Expected Load command"),
+        }
+    }
+
+    // Monitor commands
+    #[test]
+    fn test_parse_monitor() {
+        let cmd = ShellCommand::parse_line("monitor my_actor").unwrap();
+        match cmd {
+            ShellCommand::Monitor { actor } => assert_eq!(actor, "my_actor"),
+            _ => panic!("Expected Monitor command"),
+        }
+    }
+
+    #[test]
+    fn test_parse_unmonitor() {
+        let cmd = ShellCommand::parse_line("unmonitor my_actor").unwrap();
+        match cmd {
+            ShellCommand::Unmonitor { actor } => assert_eq!(actor, "my_actor"),
+            _ => panic!("Expected Unmonitor command"),
+        }
+    }
+
+    // ==================== Alias Tests ====================
+
+    #[test]
+    fn test_alias_a_for_actors() {
+        let cmd = ShellCommand::parse_line("a").unwrap();
+        assert!(matches!(cmd, ShellCommand::Actors));
+    }
+
+    #[test]
+    fn test_alias_r_for_registry() {
+        let cmd = ShellCommand::parse_line("r").unwrap();
+        assert!(matches!(cmd, ShellCommand::Registry));
+    }
+
+    #[test]
+    fn test_alias_i_for_info() {
+        let cmd = ShellCommand::parse_line("i my_actor").unwrap();
+        match cmd {
+            ShellCommand::Info { actor } => assert_eq!(actor, "my_actor"),
+            _ => panic!("Expected Info command"),
+        }
+    }
+
+    #[test]
+    fn test_alias_s_for_send() {
+        let cmd = ShellCommand::parse_line("s actor message").unwrap();
+        match cmd {
+            ShellCommand::Send { actor, message } => {
+                assert_eq!(actor, "actor");
+                assert_eq!(message, "message");
+            }
+            _ => panic!("Expected Send command"),
+        }
+    }
+
+    #[test]
+    fn test_alias_c_for_call() {
+        let cmd = ShellCommand::parse_line("c actor message").unwrap();
+        match cmd {
+            ShellCommand::Call { actor, message } => {
+                assert_eq!(actor, "actor");
+                assert_eq!(message, "message");
+            }
+            _ => panic!("Expected Call command"),
+        }
+    }
+
+    #[test]
+    fn test_alias_sf_for_send_file() {
+        let cmd = ShellCommand::parse_line("sf actor file.json").unwrap();
+        match cmd {
+            ShellCommand::SendFile { actor, file_path } => {
+                assert_eq!(actor, "actor");
+                assert_eq!(file_path, "file.json");
+            }
+            _ => panic!("Expected SendFile command"),
+        }
+    }
+
+    #[test]
+    fn test_alias_l_for_load() {
+        let cmd = ShellCommand::parse_line("l script.sh").unwrap();
+        match cmd {
+            ShellCommand::Load { script_path } => assert_eq!(script_path, "script.sh"),
+            _ => panic!("Expected Load command"),
+        }
+    }
+
+    #[test]
+    fn test_alias_q_for_quit() {
+        let cmd = ShellCommand::parse_line("q").unwrap();
+        assert!(matches!(cmd, ShellCommand::Exit));
+    }
+}

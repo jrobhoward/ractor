@@ -2,7 +2,7 @@
 
 **Branch**: feature/shell
 **Goal**: Prepare ractor_shell for PR to upstream ractor repository
-**Status**: Integration Complete, Pre-PR Cleanup In Progress (1.1 ✅, 1.2 ✅)
+**Status**: Integration Complete, Pre-PR Cleanup In Progress (1.1 ✅, 1.2 ✅, 1.3 ✅)
 
 ---
 
@@ -76,42 +76,42 @@
   - Added `//!` doc comments to: `lib.rs`, `introspection.rs`, `protocol.rs`, `messages.rs`, `commands/mod.rs`
   - `dynamic.rs`, `monitor.rs`, `completer.rs` already had module docs
 
-### 1.3 Testing
+### 1.3 Testing ✅
 
 **Estimated Time**: 4-6 hours
+**Status**: Complete
 
-- [ ] **Add unit tests for core functionality**
+- [x] **Add unit tests for core functionality**
   - File: `ractor_shell/src/lib.rs`
-    - Test command parsing (`ShellCommand::parse_line`)
-    - Test prompt building
-    - Test command execution (mocked)
+    - Added 45 tests for `ShellCommand::parse_line` covering all commands, aliases, and error cases
+    - Tests for prompt building included in integration tests
   - File: `ractor_shell/src/dynamic.rs`
-    - Test JSON parsing for DynamicMessage
-    - Test CallResponse serialization
-  - File: `ractor_shell/src/commands/` (if split into modules)
-    - Test individual command logic
+    - Added test for DynamicMessage actor (test_dynamic_actor_ping)
+  - Existing tests: completer (2), messages (3), monitor (1)
+  - **Total unit tests: 52**
 
-- [ ] **Add integration tests**
-  - Create: `ractor_shell/tests/integration_test.rs`
-    - Test spawning actors and querying via shell state
-    - Test dynamic message sending to actors
-    - Test process group queries
-    - Test monitoring infrastructure
+- [x] **Add integration tests**
+  - Created: `ractor_shell/tests/integration_test.rs`
+    - test_shell_state_and_prompt - Shell state creation and prompt building
+    - test_spawn_and_query_actor - Actor spawning and registry queries
+    - test_dynamic_message_ping - DynamicMessage support check
+    - test_process_group_membership - Process group queries
+    - test_call_response_success - RPC call success path
+    - test_call_response_error - RPC call error path
+    - test_cast_message - Cast message and state mutation
+  - **Total integration tests: 7**
 
-- [ ] **Verify all examples run successfully**
-  ```bash
-  cargo run --example demo -p ractor_shell
-  cargo run --example dynamic_actor -p ractor_shell
-  cargo run --example monitoring_demo -p ractor_shell
-  ```
-  - Fix any panics or errors
-  - Ensure graceful shutdown
+- [x] **Verify all examples run successfully**
+  - `cargo run --example demo -p ractor_shell` ✓
+  - `cargo run --example dynamic_actor -p ractor_shell` ✓
+  - `cargo run --example monitoring_demo -p ractor_shell` ✓
+  - All examples start, accept input, and exit cleanly
 
-- [ ] **Run tests in CI configuration**
-  ```bash
-  cargo test --package ractor_shell
-  cargo test --workspace  # Should still pass
-  ```
+- [x] **Run tests in CI configuration**
+  - `cargo test --package ractor_shell` ✓ (59 tests pass)
+  - `cargo test --workspace` ✓ (all workspace tests pass)
+  - `cargo clippy --package ractor_shell --tests --examples -- -D warnings` ✓
+  - `cargo fmt --package ractor_shell -- --check` ✓
 
 ### 1.4 Dependencies Audit
 

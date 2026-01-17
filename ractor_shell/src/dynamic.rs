@@ -163,4 +163,17 @@ mod tests {
             }
         }
     }
+
+    #[tokio::test]
+    async fn test_dynamic_actor_ping() {
+        let (actor_ref, _handle) = Actor::spawn(None, TestActor, ())
+            .await
+            .expect("Failed to spawn test actor");
+
+        // Test ping functionality
+        let supports = supports_dynamic_messages(actor_ref.clone()).await;
+        assert!(supports);
+
+        actor_ref.stop(None);
+    }
 }
