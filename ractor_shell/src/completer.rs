@@ -1,7 +1,7 @@
 //! Tab completion for the ractor shell
 //!
 //! Provides context-aware tab completion for commands, actor names,
-//! process groups, and node names.
+//! process groups, node names, and file paths.
 
 use rustyline::completion::{Completer, Pair};
 use rustyline::highlight::Highlighter;
@@ -9,6 +9,7 @@ use rustyline::hint::Hinter;
 use rustyline::validate::Validator;
 use rustyline::{Context, Helper};
 use std::borrow::Cow;
+use std::path::Path;
 
 /// Helper for rustyline that provides tab completion
 #[derive(Default)]
@@ -93,6 +94,80 @@ impl ShellHelper {
             "use" => vec!["local"],
             _ => vec![],
         }
+    }
+
+    /// Complete file paths
+    fn complete_file_path(prefix: &str) -> Vec<Pair> {
+        let mut candidates = Vec::new();
+
+        // Handle empty prefix - show current directory contents
+        let (dir_path, file_prefix) = if prefix.is_empty() {
+            (Path::new("."), "")
+        } else {
+            let path = Path::new(prefix);
+            // If ends with separator or is a directory, list its contents
+            if prefix.ends_with('/') || prefix.ends_with(std::path::MAIN_SEPARATOR) || path.is_dir()
+            {
+                (path, "")
+            } else {
+                // Otherwise, complete partial filename in the parent directory
+                (
+                    path.parent().unwrap_or(Path::new(".")),
+                    path.file_name().and_then(|s| s.to_str()).unwrap_or(""),
+                )
+            }
+        };
+
+        // Read directory contents
+        if let Ok(entries) = std::fs::read_dir(dir_path) {
+            for entry in entries.flatten() {
+                if let Ok(file_name) = entry.file_name().into_string() {
+                    if file_name.starts_with(file_prefix) {
+                        let is_dir = entry.path().is_dir();
+                        let display = if is_dir {
+                            format!("{}/", file_name)
+                        } else {
+                            file_name.clone()
+                        };
+
+                        // Build the full replacement path
+                        let replacement = if prefix.is_empty() || prefix == "." {
+                            display.clone()
+                        } else if prefix.ends_with('/')
+                            || prefix.ends_with(std::path::MAIN_SEPARATOR)
+                        {
+                            format!("{}{}", prefix, display)
+                        } else if let Some(parent) = Path::new(prefix).parent() {
+                            if parent == Path::new("") {
+                                display.clone()
+                            } else {
+                                format!("{}/{}", parent.to_str().unwrap_or(""), display)
+                            }
+                        } else {
+                            display.clone()
+                        };
+
+                        candidates.push(Pair {
+                            display,
+                            replacement,
+                        });
+                    }
+                }
+            }
+        }
+
+        // Sort directories first, then by name
+        candidates.sort_by(|a, b| {
+            let a_is_dir = a.display.ends_with('/');
+            let b_is_dir = b.display.ends_with('/');
+            match (a_is_dir, b_is_dir) {
+                (true, false) => std::cmp::Ordering::Less,
+                (false, true) => std::cmp::Ordering::Greater,
+                _ => a.display.cmp(&b.display),
+            }
+        });
+
+        candidates
     }
 }
 
@@ -201,18 +276,43 @@ impl Completer for ShellHelper {
                     return Ok((word_start, candidates));
                 }
             }
-            "info" | "stop" | "send" | "call" | "send-file" | "sendfile" | "monitor"
-            | "unmonitor" | "i" | "s" | "c" | "sf" => {
-                // Complete actor names
-                let candidates: Vec<Pair> = self
-                    .actor_names
-                    .iter()
-                    .filter(|a| a.starts_with(current_word))
-                    .map(|a| Pair {
-                        display: a.clone(),
-                        replacement: a.clone(),
-                    })
-                    .collect();
+            "info" | "stop" | "send" | "call" | "monitor" | "unmonitor" | "i" | "s" | "c" => {
+                // Complete actor names (first argument)
+                if parts.len() <= 2 {
+                    let candidates: Vec<Pair> = self
+                        .actor_names
+                        .iter()
+                        .filter(|a| a.starts_with(current_word))
+                        .map(|a| Pair {
+                            display: a.clone(),
+                            replacement: a.clone(),
+                        })
+                        .collect();
+                    return Ok((word_start, candidates));
+                }
+            }
+            "send-file" | "sendfile" | "sf" => {
+                if parts.len() <= 2 {
+                    // First argument: actor name
+                    let candidates: Vec<Pair> = self
+                        .actor_names
+                        .iter()
+                        .filter(|a| a.starts_with(current_word))
+                        .map(|a| Pair {
+                            display: a.clone(),
+                            replacement: a.clone(),
+                        })
+                        .collect();
+                    return Ok((word_start, candidates));
+                } else if parts.len() == 3 || (parts.len() == 2 && line.ends_with(' ')) {
+                    // Second argument: file path
+                    let candidates = Self::complete_file_path(current_word);
+                    return Ok((word_start, candidates));
+                }
+            }
+            "load" | "l" => {
+                // Complete file paths
+                let candidates = Self::complete_file_path(current_word);
                 return Ok((word_start, candidates));
             }
             "use" => {

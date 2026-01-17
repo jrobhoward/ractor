@@ -152,10 +152,19 @@ async fn main() -> anyhow::Result<()> {
 
 ### 🚧 Current Limitations
 
-- **Named actors only**: Full enumeration requires ractor core API additions
-- **Process groups instead of supervision trees**: True supervision tree introspection requires ractor core APIs
-- **Dynamic messages opt-in**: Actors must use `DynamicMessage` as their message type to receive JSON from the shell
-- **Monitoring events pending**: Monitor infrastructure in place, real-time event display needs deeper ractor supervision integration
+**Addressable now (workarounds exist):**
+
+- **Dynamic messages opt-in**: Actors must use `DynamicMessage` as their message type to receive JSON from the shell. This is by design - Rust's type safety prevents sending arbitrary messages to typed actors.
+
+**Requires ractor core API additions (Phase 2):**
+
+- **Named actors only**: Only actors registered in the registry (named actors) are visible. Full actor enumeration would require a `get_all_actors()` API in ractor core.
+- **Process groups instead of supervision trees**: True supervision tree visualization requires exposing supervision relationships in ractor core.
+- **Monitoring limited to stored state**: The `monitor` command records actors to watch, but real-time event delivery requires linking to monitored actors. Full implementation needs either:
+  - Linking MonitorActor to targets (changes supervision hierarchy)
+  - Global event subscription API in ractor core
+
+See [ARCHITECTURE.md](ARCHITECTURE.md) for design decisions and trade-offs.
 
 ## Output Examples
 

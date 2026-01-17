@@ -31,6 +31,9 @@ anyhow = "1"  # Used in main.rs and examples for top-level error handling
 dirs = "5"
 hostname = "0.3"
 chrono = "0.4"
+toml = "0.8"
+
+terminal_size = "0.3"
 
 [dev-dependencies]
 proptest = "1"

@@ -131,6 +131,13 @@ pub enum MonitorMessage {
 
 impl ractor::Message for MonitorMessage {}
 
+/// Arguments for the monitor actor
+#[derive(Default)]
+pub struct MonitorArgs {
+    /// Suppress verbose output (for scripting)
+    pub quiet: bool,
+}
+
 /// State for the monitor actor
 pub struct MonitorState {
     /// Currently monitored actor names
@@ -139,14 +146,18 @@ pub struct MonitorState {
     event_history: Vec<MonitorEvent>,
     /// Maximum events to keep in history
     max_history: usize,
+    /// Quiet mode - suppresses verbose output (reserved for future use)
+    #[allow(dead_code)]
+    quiet: bool,
 }
 
-impl Default for MonitorState {
-    fn default() -> Self {
+impl MonitorState {
+    fn new(quiet: bool) -> Self {
         Self {
             monitored: HashMap::new(),
             event_history: Vec::new(),
             max_history: 100,
+            quiet,
         }
     }
 }
@@ -157,15 +168,17 @@ pub struct MonitorActor;
 impl Actor for MonitorActor {
     type Msg = MonitorMessage;
     type State = MonitorState;
-    type Arguments = ();
+    type Arguments = MonitorArgs;
 
     async fn pre_start(
         &self,
         _myself: ActorRef<Self::Msg>,
-        _: (),
+        args: MonitorArgs,
     ) -> Result<Self::State, ActorProcessingErr> {
-        println!("{} Monitor system started", "✓".green());
-        Ok(MonitorState::default())
+        if !args.quiet {
+            println!("{} Monitor system started", "✓".green());
+        }
+        Ok(MonitorState::new(args.quiet))
     }
 
     async fn handle(

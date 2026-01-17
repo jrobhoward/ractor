@@ -17,6 +17,34 @@ use ractor_cluster::RactorClusterMessage;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+/// Result of a dynamic message send operation
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum DynamicSendResult {
+    /// Message was sent successfully
+    Success,
+    /// Actor was not found
+    ActorNotFound,
+    /// Actor doesn't support dynamic messages
+    NotDynamic,
+    /// Failed to send the message
+    SendFailed(String),
+}
+
+/// Result of a dynamic message call operation
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum DynamicCallResult {
+    /// Call completed successfully with a response
+    Success(serde_json::Value),
+    /// Call completed with an error response from the actor
+    Error(String),
+    /// Actor was not found
+    ActorNotFound,
+    /// Actor doesn't support dynamic messages
+    NotDynamic,
+    /// Call failed (e.g., timeout, channel error)
+    CallFailed(String),
+}
+
 /// Messages for shell protocol communication with remote nodes
 #[derive(RactorClusterMessage, Debug)]
 pub enum ShellProtocolMessage {
@@ -42,6 +70,14 @@ pub enum ShellProtocolMessage {
     /// Get cluster topology from this node's perspective
     #[rpc]
     GetClusterTopology(RpcReplyPort<ClusterTopology>),
+
+    /// Send a dynamic message to an actor (cast - fire and forget)
+    #[rpc]
+    SendDynamicMessage(String, serde_json::Value, RpcReplyPort<DynamicSendResult>),
+
+    /// Call an actor with a dynamic message (RPC - wait for response)
+    #[rpc]
+    CallDynamicMessage(String, serde_json::Value, RpcReplyPort<DynamicCallResult>),
 }
 
 /// Information about an actor (serializable across network)

@@ -21,7 +21,13 @@
 //! ).await?;
 //! ```
 
-use crate::protocol::{ActorInfo, ActorLocation, ClusterTopology, NodeInfo, ShellProtocolMessage};
+use crate::dynamic::{supports_dynamic_messages, CallResponse, DynamicMessage};
+use crate::protocol::{
+    ActorInfo, ActorLocation, ClusterTopology, DynamicCallResult, DynamicSendResult, NodeInfo,
+    ShellProtocolMessage,
+};
+use crate::DEFAULT_RPC_TIMEOUT;
+use ractor::rpc::CallResult;
 use ractor::{Actor, ActorProcessingErr, ActorRef};
 use std::collections::{HashMap, HashSet};
 
@@ -103,9 +109,85 @@ impl Actor for IntrospectionActor {
                 let topology = build_cluster_topology(&state.node_name);
                 let _ = reply.send(topology);
             }
+
+            ShellProtocolMessage::SendDynamicMessage(actor_name, json_value, reply) => {
+                let result = send_dynamic_message_to_actor(&actor_name, json_value).await;
+                let _ = reply.send(result);
+            }
+
+            ShellProtocolMessage::CallDynamicMessage(actor_name, json_value, reply) => {
+                let result = call_dynamic_message_to_actor(&actor_name, json_value).await;
+                let _ = reply.send(result);
+            }
         }
 
         Ok(())
+    }
+}
+
+/// Send a dynamic message to an actor (cast - fire and forget)
+async fn send_dynamic_message_to_actor(
+    actor_name: &str,
+    json_value: serde_json::Value,
+) -> DynamicSendResult {
+    // Find the actor in registry
+    let Some(cell) = ractor::registry::where_is(actor_name.to_string()) else {
+        return DynamicSendResult::ActorNotFound;
+    };
+
+    // Convert to dynamic message actor reference
+    let dynamic_ref: ActorRef<DynamicMessage> = ActorRef::from(cell.clone());
+
+    // Check if the actor supports dynamic messages
+    if !supports_dynamic_messages(dynamic_ref.clone()).await {
+        return DynamicSendResult::NotDynamic;
+    }
+
+    // Send the message
+    match dynamic_ref.cast(DynamicMessage::Cast(json_value)) {
+        Ok(()) => DynamicSendResult::Success,
+        Err(e) => DynamicSendResult::SendFailed(format!("{:?}", e)),
+    }
+}
+
+/// Call an actor with a dynamic message (RPC - wait for response)
+async fn call_dynamic_message_to_actor(
+    actor_name: &str,
+    json_value: serde_json::Value,
+) -> DynamicCallResult {
+    // Find the actor in registry
+    let Some(cell) = ractor::registry::where_is(actor_name.to_string()) else {
+        return DynamicCallResult::ActorNotFound;
+    };
+
+    // Convert to dynamic message actor reference
+    let dynamic_ref: ActorRef<DynamicMessage> = ActorRef::from(cell.clone());
+
+    // Check if the actor supports dynamic messages
+    if !supports_dynamic_messages(dynamic_ref.clone()).await {
+        return DynamicCallResult::NotDynamic;
+    }
+
+    // Make the RPC call
+    let call_result = dynamic_ref
+        .call(
+            |reply| DynamicMessage::Call(json_value, reply),
+            Some(DEFAULT_RPC_TIMEOUT),
+        )
+        .await;
+
+    match call_result {
+        Ok(CallResult::Success(response)) => match response {
+            CallResponse::Success(value) => DynamicCallResult::Success(value),
+            CallResponse::Error(err) => DynamicCallResult::Error(err),
+        },
+        Ok(CallResult::Timeout) => {
+            DynamicCallResult::CallFailed(format!("Timeout after {:?}", DEFAULT_RPC_TIMEOUT))
+        }
+        Ok(CallResult::SenderError) => {
+            DynamicCallResult::CallFailed("Sender error (actor may have stopped)".to_string())
+        }
+        Err(e) => DynamicCallResult::CallFailed(format!("{:?}", e)),
     }
 }
 

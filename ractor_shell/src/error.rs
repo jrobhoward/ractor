@@ -28,18 +28,18 @@ pub enum ShellError {
     EmptyCommand,
 
     /// Unknown command entered.
-    #[error("Unknown command: {0}")]
+    #[error("Unknown command: '{0}'. Type 'help' to see available commands.")]
     UnknownCommand(String),
 
     /// Missing required argument for a command.
-    #[error("{command} requires {requirement}")]
+    #[error("{command} requires {requirement}. Type 'help {command}' for usage.")]
     MissingArgument {
         command: &'static str,
         requirement: &'static str,
     },
 
     /// Unknown subcommand for a parent command.
-    #[error("Unknown {parent} subcommand: {subcommand}")]
+    #[error("Unknown {parent} subcommand: '{subcommand}'. Type 'help {parent}' for usage.")]
     UnknownSubcommand {
         parent: &'static str,
         subcommand: String,
@@ -77,7 +77,7 @@ pub enum ShellError {
     FileReadError { path: String, message: String },
 
     /// JSON parsing error.
-    #[error("JSON parse error: {0}")]
+    #[error("JSON parse error: {0}. Example: {{\"command\": \"value\"}}")]
     JsonParseError(String),
 
     /// Feature not yet implemented.

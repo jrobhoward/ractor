@@ -43,6 +43,7 @@
 //!
 //! ## Modules
 //!
+//! - [`config`]: Configuration file support
 //! - [`dynamic`]: Dynamic message interface for shell-to-actor communication
 //! - [`introspection`]: Remote introspection actor for cross-node queries
 //! - [`monitor`]: Actor lifecycle monitoring
@@ -53,16 +54,18 @@ use colored::Colorize;
 use ractor::{rpc::CallResult, Actor, ActorRef};
 use std::collections::HashMap;
 use std::time::Duration;
-use tabled::{Table, Tabled};
+use tabled::Tabled;
 
 pub mod commands;
 pub mod completer;
+pub mod config;
 pub mod dynamic;
 pub mod error;
 pub mod introspection;
 pub mod messages;
 pub mod monitor;
 pub mod protocol;
+pub mod table;
 
 pub use error::{ShellError, ShellResult};
 
@@ -100,6 +103,8 @@ pub struct ShellState {
     pub cluster_topology: Option<ClusterTopology>,
     /// Monitor actor for tracking actor lifecycle events
     pub monitor_actor: Option<ActorRef<monitor::MonitorMessage>>,
+    /// Quiet mode - suppresses verbose output (for scripting)
+    pub quiet: bool,
 }
 
 impl ShellState {
@@ -108,6 +113,18 @@ impl ShellState {
     /// This spawns the monitor actor and initializes the local node name
     /// based on the system hostname.
     pub async fn new() -> ShellResult<Self> {
+        Self::with_options(false).await
+    }
+
+    /// Create a new shell state with quiet mode for scripting.
+    ///
+    /// When `quiet` is true, verbose startup messages are suppressed.
+    pub async fn new_quiet() -> ShellResult<Self> {
+        Self::with_options(true).await
+    }
+
+    /// Create a new shell state with options.
+    async fn with_options(quiet: bool) -> ShellResult<Self> {
         let local_node_name = format!(
             "shell@{}",
             hostname::get()
@@ -116,9 +133,13 @@ impl ShellState {
                 .unwrap_or_else(|| "localhost".to_string())
         );
 
-        // Spawn monitor actor
-        let (monitor_ref, _) =
-            Actor::spawn(Some("shell_monitor".to_string()), monitor::MonitorActor, ()).await?;
+        // Spawn monitor actor with quiet flag
+        let (monitor_ref, _) = Actor::spawn(
+            Some("shell_monitor".to_string()),
+            monitor::MonitorActor,
+            monitor::MonitorArgs { quiet },
+        )
+        .await?;
 
         Ok(Self {
             should_exit: false,
@@ -128,6 +149,7 @@ impl ShellState {
             connected_nodes: HashMap::new(),
             cluster_topology: None,
             monitor_actor: Some(monitor_ref),
+            quiet,
         })
     }
 
@@ -400,8 +422,7 @@ impl ShellState {
                             });
                         }
 
-                        let table = Table::new(rows).to_string();
-                        println!("{}", table);
+                        println!("{}", table::build_table(rows));
                     }
                     CallResult::Timeout => return Err(ShellError::rpc_timeout()),
                     CallResult::SenderError => return Err(ShellError::RpcSenderError),
@@ -432,8 +453,7 @@ impl ShellState {
                 }
             }
 
-            let table = Table::new(rows).to_string();
-            println!("{}", table);
+            println!("{}", table::build_table(rows));
         }
 
         Ok(())
@@ -570,7 +590,7 @@ impl ShellState {
                             });
                         }
 
-                        let table = Table::new(rows).to_string();
+                        let table = table::build_table(rows);
                         println!("{}", table);
                     }
                     CallResult::Timeout => return Err(ShellError::rpc_timeout()),
@@ -609,7 +629,7 @@ impl ShellState {
                 });
             }
 
-            let table = Table::new(rows).to_string();
+            let table = table::build_table(rows);
             println!("{}", table);
         }
 
@@ -692,11 +712,11 @@ impl ShellState {
         };
 
         // Check if we're in remote or local mode
-        if let Some(_node_name) = &self.current_node {
-            // Remote send - not yet implemented
-            println!("{}", "Remote message sending not yet implemented.".yellow());
-            println!("{}", "Use 'use local' to switch to local mode.".yellow());
-            return Ok(());
+        if let Some(ref node_name) = self.current_node {
+            // Remote send via IntrospectionActor
+            return self
+                .cmd_send_remote(node_name.clone(), actor, json_value)
+                .await;
         }
 
         // Local send attempt
@@ -802,11 +822,11 @@ impl ShellState {
         };
 
         // Check if we're in remote or local mode
-        if let Some(_node_name) = &self.current_node {
-            // Remote call - not yet implemented
-            println!("{}", "Remote RPC calls not yet implemented.".yellow());
-            println!("{}", "Use 'use local' to switch to local mode.".yellow());
-            return Ok(());
+        if let Some(ref node_name) = self.current_node {
+            // Remote call via IntrospectionActor
+            return self
+                .cmd_call_remote(node_name.clone(), actor, json_value)
+                .await;
         }
 
         // Local call attempt
@@ -904,6 +924,168 @@ impl ShellState {
             }
         } else {
             println!("{} Actor '{}' not found in registry", "✗".red(), actor);
+        }
+
+        Ok(())
+    }
+
+    /// Send a dynamic message to an actor on a remote node
+    async fn cmd_send_remote(
+        &self,
+        node_name: String,
+        actor: String,
+        json_value: serde_json::Value,
+    ) -> ShellResult<()> {
+        let introspection_actor = self
+            .connected_nodes
+            .get(&node_name)
+            .ok_or_else(|| ShellError::NodeNotConnected(node_name.clone()))?;
+
+        // Send via IntrospectionActor
+        let result = introspection_actor
+            .call(
+                |reply| {
+                    ShellProtocolMessage::SendDynamicMessage(
+                        actor.clone(),
+                        json_value.clone(),
+                        reply,
+                    )
+                },
+                Some(DEFAULT_RPC_TIMEOUT),
+            )
+            .await
+            .map_err(ShellError::messaging)?;
+
+        match result {
+            CallResult::Success(protocol::DynamicSendResult::Success) => {
+                println!(
+                    "{} Message sent to {} on {}",
+                    "✓".green().bold(),
+                    actor.green(),
+                    node_name.yellow()
+                );
+                println!();
+                println!("{}", "Message:".bold());
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&json_value)
+                        .unwrap_or_default()
+                        .bright_black()
+                );
+            }
+            CallResult::Success(protocol::DynamicSendResult::ActorNotFound) => {
+                return Err(ShellError::RemoteActorNotFound {
+                    actor,
+                    node: node_name,
+                });
+            }
+            CallResult::Success(protocol::DynamicSendResult::NotDynamic) => {
+                println!(
+                    "{}",
+                    "⚠ This actor doesn't support dynamic messages".yellow()
+                );
+                println!();
+                println!(
+                    "  {} The actor must use DynamicMessage as its message type.",
+                    "•".bright_black()
+                );
+            }
+            CallResult::Success(protocol::DynamicSendResult::SendFailed(err)) => {
+                return Err(ShellError::RemoteOperationFailed(format!(
+                    "Failed to send message: {}",
+                    err
+                )));
+            }
+            CallResult::Timeout => {
+                return Err(ShellError::rpc_timeout());
+            }
+            CallResult::SenderError => {
+                return Err(ShellError::RpcSenderError);
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Call an actor on a remote node with a dynamic message
+    async fn cmd_call_remote(
+        &self,
+        node_name: String,
+        actor: String,
+        json_value: serde_json::Value,
+    ) -> ShellResult<()> {
+        let introspection_actor = self
+            .connected_nodes
+            .get(&node_name)
+            .ok_or_else(|| ShellError::NodeNotConnected(node_name.clone()))?;
+
+        // Call via IntrospectionActor
+        let result = introspection_actor
+            .call(
+                |reply| {
+                    ShellProtocolMessage::CallDynamicMessage(
+                        actor.clone(),
+                        json_value.clone(),
+                        reply,
+                    )
+                },
+                Some(DEFAULT_RPC_TIMEOUT),
+            )
+            .await
+            .map_err(ShellError::messaging)?;
+
+        match result {
+            CallResult::Success(protocol::DynamicCallResult::Success(response)) => {
+                println!(
+                    "{} RPC response from {} on {}:",
+                    "✓".green().bold(),
+                    actor.green(),
+                    node_name.yellow()
+                );
+                println!();
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&response)
+                        .unwrap_or_default()
+                        .bright_white()
+                );
+            }
+            CallResult::Success(protocol::DynamicCallResult::Error(err)) => {
+                println!("{} Actor returned error: {}", "✗".red().bold(), err.red());
+            }
+            CallResult::Success(protocol::DynamicCallResult::ActorNotFound) => {
+                return Err(ShellError::RemoteActorNotFound {
+                    actor,
+                    node: node_name,
+                });
+            }
+            CallResult::Success(protocol::DynamicCallResult::NotDynamic) => {
+                println!(
+                    "{}",
+                    "⚠ This actor doesn't support dynamic messages".yellow()
+                );
+                println!();
+                println!(
+                    "  {} The actor must use DynamicMessage as its message type.",
+                    "•".bright_black()
+                );
+                println!(
+                    "  {} Handle DynamicMessage::Call variant to respond to RPC calls.",
+                    "•".bright_black()
+                );
+            }
+            CallResult::Success(protocol::DynamicCallResult::CallFailed(err)) => {
+                return Err(ShellError::RemoteOperationFailed(format!(
+                    "RPC call failed: {}",
+                    err
+                )));
+            }
+            CallResult::Timeout => {
+                return Err(ShellError::rpc_timeout());
+            }
+            CallResult::SenderError => {
+                return Err(ShellError::RpcSenderError);
+            }
         }
 
         Ok(())
@@ -1249,7 +1431,7 @@ impl ShellState {
                     })
                     .collect();
 
-                let table = Table::new(rows).to_string();
+                let table = table::build_table(rows);
                 println!("{}", table);
             }
 
@@ -1284,7 +1466,7 @@ impl ShellState {
                         })
                         .collect();
 
-                    let table = Table::new(rows).to_string();
+                    let table = table::build_table(rows);
                     println!("{}", table);
                     println!();
                 }
@@ -1329,7 +1511,7 @@ impl ShellState {
                     })
                     .collect();
 
-                let table = Table::new(rows).to_string();
+                let table = table::build_table(rows);
                 println!("{}", table);
                 println!();
                 println!(
