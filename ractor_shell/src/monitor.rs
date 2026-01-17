@@ -2,10 +2,11 @@
 //!
 //! Provides functionality to monitor actor lifecycle events similar to Erlang's process monitoring.
 
+use std::collections::HashMap;
+
 use chrono::Local;
 use colored::Colorize;
-use ractor::{Actor, ActorProcessingErr, ActorRef, SupervisionEvent};
-use std::collections::HashMap;
+use ractor::{registry, Actor, ActorProcessingErr, ActorRef, SupervisionEvent};
 
 /// Events that can be monitored
 #[derive(Debug, Clone)]
@@ -190,7 +191,7 @@ impl Actor for MonitorActor {
         match message {
             MonitorMessage::Monitor { actor_name } => {
                 // Try to find the actor in registry
-                if let Some(cell) = ractor::registry::where_is(actor_name.clone()) {
+                if let Some(cell) = registry::where_is(actor_name.clone()) {
                     let actor_id = cell.get_id();
                     state.monitored.insert(actor_name.clone(), actor_id);
 

@@ -468,3 +468,19 @@ fn parse_line___alias_q___returns_exit_variant() {
 
     assert!(matches!(cmd, ShellCommand::Exit));
 }
+
+// ==================== parse_line: Top Command ====================
+
+#[test]
+fn parse_line___top_command___returns_top_variant() {
+    let cmd = ShellCommand::parse_line("top").unwrap();
+
+    assert!(matches!(cmd, ShellCommand::Top));
+}
+
+#[test]
+fn parse_line___alias_t___returns_top_variant() {
+    let cmd = ShellCommand::parse_line("t").unwrap();
+
+    assert!(matches!(cmd, ShellCommand::Top));
+}

@@ -6,6 +6,39 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Ractor is a pure-Rust actor framework inspired by Erlang's `gen_server`, providing lightweight actors with single-threaded message processing, supervision trees, and optional distributed clustering capabilities.
 
+## Working Conventions
+
+### Git Operations
+
+**The user is responsible for all git operations.** Do not commit, push, or perform other git operations unless explicitly asked. When changes are ready, inform the user and let them handle the commit.
+
+### ractor_shell Code Style
+
+For all files under `ractor_shell/`:
+
+- **Prefer `use` imports at the top of the file** rather than fully-qualified paths throughout
+- Group imports by: std, external crates, workspace crates (ractor, ractor_cluster), local modules
+- This improves readability and makes dependencies explicit
+
+```rust
+// Good - imports at top
+use ractor::ActorStatus;
+use ractor::registry;
+
+fn example() {
+    let names = registry::registered();
+    // ...
+}
+
+// Avoid - fully-qualified paths scattered throughout
+fn example() {
+    let names = ractor::registry::registered();
+    // ...
+}
+```
+
+See `ractor_shell/SKILLS.md` for additional ractor_shell-specific conventions.
+
 ## Workspace Structure
 
 This is a Cargo workspace with multiple crates:
@@ -66,6 +99,9 @@ cargo test --package ractor --features cluster
 cargo test --package ractor --features async-std,message_span_propogation --no-default-features
 cargo test --package ractor --features monitors
 cargo test --package ractor --features blanket_serde
+cargo test --package ractor --features output-port-v2
+cargo test --package ractor --features async-trait
+cargo test --package ractor_shell
 
 # Run a specific test
 cargo test --package ractor --test <test_name>

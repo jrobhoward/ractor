@@ -2,7 +2,9 @@
 
 **Branch**: feature/shell
 **Goal**: Prepare ractor_shell for PR to upstream ractor repository
-**Status**: Integration Complete, Pre-PR Cleanup In Progress (1.1 ✅, 1.2 ✅, 1.3 ✅, 1.4 ✅, 1.5 ✅, 2.1 ✅, 2.2 ✅, 2.3 ✅, 2.4 ✅, 3.1 ✅)
+**Status**: Integration Complete, Pre-PR Cleanup In Progress (1.1 ✅, 1.2 ✅, 1.3 ✅, 1.4 ✅, 1.5 ✅, 2.1 ✅, 2.2 ✅, 2.3 ✅, 2.4 ✅, 3.1 ✅, 5.1-Phase1 ✅)
+
+**Erlang/OTP Comparison**: See [Feature Comparison](#erlang-otp-feature-comparison) section for gaps analysis vs Erlang shell/Observer.
 
 ---
 
@@ -365,7 +367,7 @@
 These require changes to ractor core and should be separate PRs:
 
 - [ ] **Add introspection module to ractor**
-  - Feature-gated with `shell` feature
+  - Feature-gated with `shell` or `introspection` feature
   - APIs: `get_all_actors()`, `get_actor_info()`, `get_supervision_tree()`
   - File: `ractor/src/introspection.rs`
 
@@ -375,6 +377,223 @@ These require changes to ractor core and should be separate PRs:
 
 - [ ] **Add message queue depth API**
   - Expose channel queue length
+  - Add `get_message_queue_len()` to ActorCell
+  - Enable: message queue monitoring, backpressure detection
+
+### 4.2 Enhanced Introspection APIs (Erlang Parity)
+
+**Estimated Time**: 8-12 hours (requires ractor core PRs)
+
+These additions would bring ractor_shell closer to Erlang Observer capabilities:
+
+- [ ] **Expose supervision tree publicly**
+  - Make `get_children()` public on ActorCell (currently `pub(crate)`)
+  - Make `try_get_supervisor()` public on ActorCell (currently `pub(crate)`)
+  - Enable: true supervision tree visualization (not just process groups)
+  - Erlang equivalent: `process_info(Pid, links)`, Observer supervision view
+
+- [ ] **Add actor metrics API**
+  - Messages processed count (similar to Erlang "reductions")
+  - Actor uptime/start time
+  - Enable: actor sorting by activity, identifying busy actors
+  - Erlang equivalent: `process_info(Pid, reductions)`
+
+- [ ] **Expose link/monitor relationships**
+  - List monitors and monitored_by for an actor
+  - Erlang equivalent: `process_info(Pid, monitors)`, `process_info(Pid, monitored_by)`
+
+---
+
+## Priority 5: Shell Enhancements (No Core Changes Required)
+
+These features can be implemented in ractor_shell without modifications to ractor core.
+
+### 5.1 Actor Console TUI (`top` command) ⭐ QUICK WIN
+
+**Estimated Time**: 8-12 hours (Phase 1), expandable later
+**Value**: HIGH - Visual real-time actor monitoring like Erlang's observer_cli
+**Dependencies**: None (uses existing APIs + tracing spans)
+**Status**: Phase 1 Complete ✅
+
+Inspired by [observer_cli](https://github.com/zhongwencool/observer_cli) and [tokio-console](https://github.com/tokio-rs/console).
+
+#### Phase 1: Quick Win (No Core Changes) ✅
+
+- [x] **Add `ratatui` and `crossterm` dependencies**
+  - TUI framework for terminal interface
+  - Cross-platform terminal handling
+  - Also added: `tracing-subscriber`, `dashmap`
+
+- [x] **Create `top` command with basic TUI**
+  - Full-screen terminal UI with ratatui
+  - Auto-refresh (default 1s, configurable)
+  - Exit with 'q' or Ctrl+C
+  - New files: `tui/mod.rs`, `tui/app.rs`, `tui/ui.rs`, `tui/metrics.rs`
+  ```
+  ractor top - Actor Dashboard                    [q]uit [s]ort [/]filter
+  ─────────────────────────────────────────────────────────────────────────
+  ID      Name              Status     Uptime    PG Groups
+  0.1     worker_1          Running    1m 23s    workers, demo_group
+  0.2     worker_2          Running    1m 23s    workers
+  0.3     supervisor        Running    1m 25s    supervisors
+  0.0     shell_monitor     Running    1m 25s    -
+  ─────────────────────────────────────────────────────────────────────────
+  Actors: 4 total | 4 running | 0 stopped     Refresh: 1s     [?] help
+  ```
+
+- [x] **Data sources (available now)**
+  - Actor list from `ractor::registry::registered()`
+  - Actor status from `ActorCell::get_status()`
+  - Process group membership from `ractor::pg`
+  - Uptime: track locally when actors appear in registry
+
+- [x] **Basic interactivity**
+  - Sort by: name, ID, status, uptime, groups (press `s` to cycle, `S` to reverse)
+  - Filter by name/ID pattern (press `/` to enter filter mode)
+  - Arrow keys / j/k to navigate, g/G for top/bottom, PageUp/PageDown
+  - Help overlay with `?`
+
+- [x] **Create ActorMetricsCollector**
+  - Collects metrics from registry and process groups
+  - Tracks first-seen time for uptime calculation
+  - Ready for tracing Layer integration in Phase 2
+
+#### Phase 2: Enhanced Metrics (When Core APIs Available)
+
+- [ ] **Add metrics columns (requires Priority 4.2)**
+  - Msgs/sec: from `ActorCell::get_messages_processed()`
+  - Queue depth: from `ActorCell::get_queue_depth()`
+  - Precise uptime: from `ActorCell::get_start_time()`
+
+- [ ] **Add supervision tree panel**
+  - Show parent/child relationships (requires exposed tree)
+  - Visual hierarchy like `pstree`
+
+#### Phase 3: Full Dashboard
+
+- [ ] **Multiple panels (tab-switchable)**
+  - Actors panel (default)
+  - System stats panel (totals, rates)
+  - Process groups panel
+  - Cluster panel (when connected to remote)
+
+- [ ] **Sparkline graphs**
+  - Message throughput over time
+  - Actor count over time
+
+- [ ] **Export/snapshot**
+  - Dump current view to JSON
+  - Screenshot to file
+
+### 5.2 Tracing Support
+
+**Estimated Time**: 6-10 hours
+**Value**: HIGH - One of the most valuable debugging tools in Erlang
+
+- [ ] **Add `trace` command for message flow**
+  - Trace actor communication patterns
+  - Filter by actor name/pattern
+  - Log messages with timestamps
+  - Implementation: Hook via DynamicMessage actors or shell-side proxy
+  - Erlang equivalent: `dbg`, trace BIFs
+
+- [ ] **Add `trace-to-file` for persistent logging**
+  - Export trace data for offline analysis
+  - Support JSON or structured format
+
+### 5.3 Simple Watch Mode (Non-TUI Alternative)
+
+**Estimated Time**: 2-3 hours
+**Value**: MEDIUM - Lightweight alternative to full TUI
+
+- [ ] **Add `watch` command with auto-refresh**
+  - `watch actors` - refresh actor list every N seconds
+  - `watch stats` - continuous system stats
+  - `watch pg <group>` - monitor process group membership
+  - Configurable refresh interval (default 2s)
+  - Press 'q' or Ctrl+C to exit watch mode
+  - Uses existing table output (no ratatui required)
+
+### 5.4 Network/Cluster Diagnostics
+
+**Estimated Time**: 3-4 hours
+**Value**: MEDIUM - Important for distributed debugging
+
+- [ ] **Enhance `nodes` command with connection stats**
+  - Show connection duration (how long connected)
+  - Show last activity timestamp
+  - Show connection state (healthy/degraded)
+
+- [ ] **Add `ping <node>` command**
+  - Explicit latency measurement to remote node
+  - Connection health check with round-trip time
+  - Erlang equivalent: `net_adm:ping/1`
+
+- [ ] **Add `netstat` command for cluster connections**
+  - Show bytes sent/received per connection
+  - Show pending message counts
+  - Erlang equivalent: `inet:getstat/1`
+
+### 5.5 Enhanced Actor Inspection
+
+**Estimated Time**: 2-3 hours
+**Value**: LOW-MEDIUM - Quality of life improvements
+
+- [ ] **Add `whereis <name>` command (Erlang-style)**
+  - Quick lookup of registered name to actor ID
+  - Cleaner than filtering `registry` output
+  - Erlang equivalent: `whereis/1`
+
+- [ ] **Add `links <actor>` command placeholder**
+  - Show what the actor is linked to (when 4.2 API available)
+  - Show monitors/monitored_by relationships
+  - Gracefully degrade when API not available
+
+- [ ] **Rename `tree` to `pgtree` or clarify documentation**
+  - Current `tree` shows process groups, not supervision trees
+  - Add note explaining difference from Erlang supervision trees
+  - Alternative: keep `tree` but add `supervtree` when 4.2 available
+
+### 5.6 Shell UX Improvements
+
+**Estimated Time**: 2-3 hours
+**Value**: LOW - Polish items
+
+- [ ] **Add `clear` command**
+  - Clear terminal screen
+  - Common shell convenience
+
+- [ ] **Add `alias` command for user-defined aliases**
+  - Let users define custom short commands
+  - Persist in config file
+
+- [ ] **Add `set` command for runtime configuration**
+  - `set timeout 10` - change RPC timeout
+  - `set refresh 5` - change watch refresh rate
+
+---
+
+## Erlang/OTP Feature Comparison
+
+Reference for future development priorities:
+
+| Feature | ractor_shell | Erlang Equivalent | Status |
+|---------|-------------|-------------------|--------|
+| Process listing | `actors`, `registry` | `processes()`, `registered()` | ✅ Implemented |
+| Process groups | `pg list`, `pg members` | `pg:get_members/1` | ✅ Implemented |
+| Basic info | `info` (ID, name, status) | `process_info/1` | ✅ Partial |
+| Stop/Kill | `stop` | `exit/2` | ✅ Implemented |
+| Remote connection | `connect`, `use` | `-remsh`, `net_adm:ping/1` | ✅ Implemented |
+| Cluster topology | `cluster` commands | `nodes()`, observer | ✅ Implemented |
+| Monitoring | `monitor`/`unmonitor` | `erlang:monitor/2` | ✅ Implemented |
+| Message sending | `send`, `call` | Direct calls | ✅ DynamicMessage only |
+| **Top/Dashboard TUI** | `top` | observer_cli | ✅ Phase 1 Complete |
+| Message queue depth | - | `message_queue_len` | ❌ Needs core API (4.1) |
+| Supervision trees | `tree` (pg only) | Observer supervision view | ⚠️ Needs core API (4.2) |
+| Link inspection | - | `links`, `monitors` | ❌ Needs core API (4.2) |
+| Tracing | - | `dbg`, trace BIFs | ❌ Planned (5.2) |
+| Live refresh (simple) | `watch` | - | ❌ Planned (5.3) |
+| Memory/reductions | - | `memory`, `reductions` | ❌ Needs core API (4.2) |
 
 ---
 
@@ -480,11 +699,25 @@ From analyzing ractor codebase:
 
 ### Estimated Total Time
 
-- **Priority 1 (Critical)**: 10-17 hours
-- **Priority 2 (Important)**: 11-16 hours
-- **Priority 3 (Nice-to-Have)**: 10-17 hours
+- **Priority 1 (Critical)**: 10-17 hours ✅ Complete
+- **Priority 2 (Important)**: 11-16 hours ✅ Complete
+- **Priority 3 (Nice-to-Have)**: 10-17 hours ✅ Mostly Complete
+- **Priority 4 (Core Changes)**: 8-12 hours (requires ractor core PRs)
+- **Priority 5 (Shell Enhancements)**: 23-35 hours (no core changes needed)
+  - ✅ **5.1 Top/Dashboard TUI Phase 1: Complete**
+  - 5.1 Phases 2-3: 4-8 hours (when core APIs available)
+  - 5.2 Tracing: 6-10 hours (HIGH value)
+  - 5.3 Simple Watch Mode: 2-3 hours (MEDIUM value)
+  - 5.4 Network Diagnostics: 3-4 hours (MEDIUM value)
+  - 5.5 Enhanced Inspection: 2-3 hours (LOW-MEDIUM value)
+  - 5.6 UX Improvements: 2-3 hours (LOW value)
 
-**Recommended for initial PR**: Priority 1 + 2.1 + 2.2 = ~15-25 hours
+**Recommended for initial PR**: Priority 1 + 2 = ✅ Complete
+
+**Recommended next steps (post-PR)**:
+1. ✅ **Priority 5.1 (`top` command) Phase 1** - Complete
+2. Priority 5.2 (Tracing) - Message flow debugging
+3. Priority 4.1 (Core APIs) - Unlocks metrics for `top` Phases 2-3
 
 ---
 

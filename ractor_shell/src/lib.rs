@@ -50,10 +50,12 @@
 //! - [`protocol`]: Shell protocol messages for cluster communication
 //! - [`completer`]: Tab completion support
 
-use colored::Colorize;
-use ractor::{rpc::CallResult, Actor, ActorRef};
 use std::collections::HashMap;
 use std::time::Duration;
+
+use colored::Colorize;
+use ractor::rpc::CallResult;
+use ractor::{pg, registry, Actor, ActorRef};
 use tabled::Tabled;
 
 pub mod commands;
@@ -67,6 +69,7 @@ pub mod messages;
 pub mod monitor;
 pub mod protocol;
 pub mod table;
+pub mod tui;
 
 pub use error::{ShellError, ShellResult};
 
@@ -199,7 +202,23 @@ impl ShellState {
             ShellCommand::Monitor { actor } => self.cmd_monitor(actor).await,
             ShellCommand::Unmonitor { actor } => self.cmd_unmonitor(actor).await,
             ShellCommand::Monitors => self.cmd_monitors().await,
+            ShellCommand::Top => self.cmd_top().await,
         }
+    }
+
+    /// Launch the interactive TUI dashboard.
+    async fn cmd_top(&mut self) -> ShellResult<()> {
+        println!(
+            "{}",
+            "Launching actor dashboard... (press 'q' to exit)".cyan()
+        );
+
+        // Run the TUI - this takes over the terminal
+        if let Err(e) = tui::App::run().await {
+            eprintln!("{} {}", "TUI error:".red(), e);
+        }
+
+        Ok(())
     }
 
     async fn cmd_help(&self, command: Option<String>) -> ShellResult<()> {
@@ -294,6 +313,23 @@ impl ShellState {
                     println!("\n{}", "Usage:".bold());
                     println!("  monitors");
                 }
+                "top" => {
+                    println!("{}", "top".green().bold());
+                    println!("  Launch interactive TUI dashboard for actor monitoring");
+                    println!("\n{}", "Usage:".bold());
+                    println!("  top");
+                    println!("\n{}", "Alias:".bold());
+                    println!("  t");
+                    println!("\n{}", "Keyboard Shortcuts:".bold());
+                    println!("  q, Esc      Quit dashboard");
+                    println!("  ↑/k, ↓/j    Navigate up/down");
+                    println!("  s           Cycle sort column");
+                    println!("  S           Toggle sort direction");
+                    println!("  /           Enter filter mode");
+                    println!("  c           Clear filter");
+                    println!("  r           Force refresh");
+                    println!("  ?           Show help");
+                }
                 _ => {
                     println!("{} Unknown command: {}", "Error:".red().bold(), cmd);
                 }
@@ -341,6 +377,10 @@ impl ShellState {
             println!("{}", "  System Introspection:".bright_black());
             println!("  {}             Show system statistics", "stats".green());
             println!("  {}       Show process group tree", "tree".green());
+            println!(
+                "  {}               Launch TUI actor dashboard",
+                "top".green()
+            );
             println!();
             println!("{}", "  Actor Monitoring:".bright_black());
             println!(
@@ -365,13 +405,14 @@ impl ShellState {
                 "•".bright_cyan()
             );
             println!(
-                "  {} Aliases: {}, {}, {}, {}, {}, {}",
+                "  {} Aliases: {}, {}, {}, {}, {}, {}, {}",
                 "•".bright_cyan(),
                 "a=actors".bright_black(),
                 "r=registry".bright_black(),
                 "i=info".bright_black(),
                 "s=send".bright_black(),
                 "c=call".bright_black(),
+                "t=top".bright_black(),
                 "q=quit".bright_black()
             );
             println!();
@@ -436,7 +477,7 @@ impl ShellState {
             println!("{}", "Listing actors...".bright_black());
             println!("Note: Phase 1 only shows named actors. Full enumeration coming in Phase 2.");
 
-            let registered = ractor::registry::registered();
+            let registered = registry::registered();
 
             if registered.is_empty() {
                 println!("No registered actors found.");
@@ -445,7 +486,7 @@ impl ShellState {
 
             let mut rows = Vec::new();
             for name in registered {
-                if let Some(cell) = ractor::registry::where_is(name.clone()) {
+                if let Some(cell) = registry::where_is(name.clone()) {
                     rows.push(ActorRow {
                         name: name.clone(),
                         id: cell.get_id().to_string(),
@@ -501,7 +542,7 @@ impl ShellState {
             }
         } else {
             // Local registry query
-            let registered = ractor::registry::registered();
+            let registered = registry::registered();
 
             if registered.is_empty() {
                 println!("No registered actors.");
@@ -513,7 +554,7 @@ impl ShellState {
                 format!("Registered Actors ({}):", registered.len()).bold()
             );
             for name in registered {
-                if let Some(cell) = ractor::registry::where_is(name.clone()) {
+                if let Some(cell) = registry::where_is(name.clone()) {
                     println!(
                         "  {} {} {}",
                         name.green(),
@@ -602,7 +643,7 @@ impl ShellState {
             }
         } else {
             // Local query
-            let members = ractor::pg::get_members(&group);
+            let members = pg::get_members(&group);
 
             if members.is_empty() {
                 println!(
@@ -675,7 +716,7 @@ impl ShellState {
             }
         } else {
             // Local query
-            if let Some(cell) = ractor::registry::where_is(actor.clone()) {
+            if let Some(cell) = registry::where_is(actor.clone()) {
                 println!("{}", format!("Actor: {}", actor).bold());
                 println!("  ID:     {}", cell.get_id());
                 println!("  Status: {:?}", cell.get_status());
@@ -722,7 +763,7 @@ impl ShellState {
 
         // Local send attempt
         // Find the actor in registry
-        if let Some(cell) = ractor::registry::where_is(actor.clone()) {
+        if let Some(cell) = registry::where_is(actor.clone()) {
             // Try to convert to a dynamic message actor
             let dynamic_ref: ActorRef<crate::dynamic::DynamicMessage> =
                 ActorRef::from(cell.clone());
@@ -831,7 +872,7 @@ impl ShellState {
         }
 
         // Local call attempt
-        if let Some(cell) = ractor::registry::where_is(actor.clone()) {
+        if let Some(cell) = registry::where_is(actor.clone()) {
             // Try to convert to a dynamic message actor
             let dynamic_ref: ActorRef<crate::dynamic::DynamicMessage> =
                 ActorRef::from(cell.clone());
@@ -1187,7 +1228,7 @@ impl ShellState {
     }
 
     async fn cmd_stop(&self, actor: String) -> ShellResult<()> {
-        if let Some(cell) = ractor::registry::where_is(actor.clone()) {
+        if let Some(cell) = registry::where_is(actor.clone()) {
             cell.stop(Some("Stopped by shell".to_string()));
             println!("{} Sent stop signal to '{}'", "✓".green(), actor);
             Ok(())
@@ -1234,7 +1275,7 @@ impl ShellState {
 
             // Discover introspection actor in the well-known group
             println!("  Discovering introspection actor...");
-            let members = ractor::pg::get_members(&INTROSPECTION_GROUP.to_string());
+            let members = pg::get_members(&INTROSPECTION_GROUP.to_string());
 
             let remote_introspection: Vec<ActorRef<ShellProtocolMessage>> = members
                 .into_iter()
@@ -1614,13 +1655,13 @@ impl ShellState {
             println!("{} {}", "Node:".bright_black(), "local".green());
             println!();
 
-            let registered = ractor::registry::registered();
+            let registered = registry::registered();
             println!("  {} {}", "Registered Actors:".bold(), registered.len());
 
             // Count actors by status
             let mut status_counts: HashMap<String, usize> = HashMap::new();
             for name in &registered {
-                if let Some(cell) = ractor::registry::where_is(name.clone()) {
+                if let Some(cell) = registry::where_is(name.clone()) {
                     let status = format!("{:?}", cell.get_status());
                     *status_counts.entry(status).or_insert(0) += 1;
                 }
@@ -1638,7 +1679,7 @@ impl ShellState {
             let mut total_members = 0;
 
             for group in known_groups {
-                let members = ractor::pg::get_members(&group.to_string());
+                let members = pg::get_members(&group.to_string());
                 if !members.is_empty() {
                     group_count += 1;
                     total_members += members.len();
@@ -1696,7 +1737,7 @@ impl ShellState {
             let known_groups = KNOWN_PROCESS_GROUPS;
 
             for group in known_groups {
-                let members = ractor::pg::get_members(&group.to_string());
+                let members = pg::get_members(&group.to_string());
                 if !members.is_empty() {
                     println!("{} {}", "├──".bright_cyan(), group.green().bold());
                     for (i, cell) in members.iter().enumerate() {
@@ -1855,6 +1896,8 @@ pub enum ShellCommand {
     Unmonitor { actor: String },
     /// List all monitored actors and recent events
     Monitors,
+    /// Launch interactive TUI dashboard. Alias: `t`. Usage: `top`
+    Top,
 }
 
 impl ShellCommand {
@@ -1869,6 +1912,7 @@ impl ShellCommand {
             "sf" => "send-file",
             "l" => "load",
             "q" => "quit",
+            "t" => "top",
             _ => cmd,
         }
     }
@@ -2054,6 +2098,7 @@ impl ShellCommand {
                 })
             }
             "monitors" => Ok(ShellCommand::Monitors),
+            "top" => Ok(ShellCommand::Top),
             _ => Err(ShellError::UnknownCommand(parts[0].to_string())),
         }
     }

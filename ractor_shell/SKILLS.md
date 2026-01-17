@@ -65,6 +65,56 @@ Error messages should be:
 
 ## Code Organization
 
+### Import Style
+
+**Prefer `use` imports at the top of each file** rather than fully-qualified paths scattered throughout the code.
+
+**Guidelines:**
+- Group imports in this order: std, external crates, workspace crates (ractor, ractor_cluster), local modules
+- Use explicit imports for types/functions used multiple times
+- Fully-qualified paths are acceptable for one-off usages within a function
+
+```rust
+// Good - imports at top, grouped logically
+use std::collections::HashMap;
+use std::time::{Duration, Instant};
+
+use dashmap::DashMap;
+use ractor::{Actor, ActorRef, ActorStatus};
+use ractor::registry;
+use ractor::pg;
+
+use crate::error::ShellError;
+use crate::protocol::ShellProtocolMessage;
+
+pub fn refresh_metrics() {
+    let names = registry::registered();
+    for name in names {
+        if let Some(cell) = registry::where_is(name.clone()) {
+            let status = cell.get_status();
+            // ...
+        }
+    }
+}
+
+// Avoid - fully-qualified paths everywhere
+pub fn refresh_metrics() {
+    let names = ractor::registry::registered();
+    for name in names {
+        if let Some(cell) = ractor::registry::where_is(name.clone()) {
+            let status = cell.get_status();
+            // ...
+        }
+    }
+}
+```
+
+**Rationale:**
+- Makes dependencies explicit and visible at the top of the file
+- Reduces visual noise in function bodies
+- Easier to identify what a module depends on
+- Consistent with Rust community conventions
+
 ### Command Handlers
 
 Each shell command should have its own handler function to keep `execute()` manageable:
@@ -148,8 +198,48 @@ actor_ref
 
 See [TESTING.md](./TESTING.md) for complete testing conventions.
 
-**Key points:**
-- Tests are isolated to separate `*_tests.rs` files (not inline `mod tests` blocks)
+### Test File Organization
+
+**Tests belong in separate files, not inline `mod tests` blocks.**
+
+For a module `foo.rs`, create a sibling test file:
+```
+src/
+├── foo.rs
+├── foo/
+│   └── foo_tests.rs    # Tests for foo.rs
+├── bar.rs
+└── bar/
+    └── bar_tests.rs    # Tests for bar.rs
+```
+
+Then include the test module conditionally:
+```rust
+// In foo.rs
+#[cfg(test)]
+mod foo_tests;
+```
+
+**Rationale:**
+- **Faster rebuilds**: Changing a test file only rebuilds tests, not the library
+- **Cleaner separation**: Production code isn't cluttered with test code
+- **Easier navigation**: Test files are clearly identifiable
+- **Consistent with ractor_shell convention**: All existing tests follow this pattern
+
+**Avoid inline test modules:**
+```rust
+// Avoid this pattern in ractor_shell
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn my_test() { ... }
+}
+```
+
+### Other Key Points
+
 - Test naming: `subject_under_test___condition___expected_result`
 - Use Arrange-Act-Assert pattern separated by whitespace (no comments)
 - Unit test command parsing exhaustively

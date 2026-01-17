@@ -27,9 +27,10 @@ use crate::protocol::{
     ShellProtocolMessage,
 };
 use crate::DEFAULT_RPC_TIMEOUT;
-use ractor::rpc::CallResult;
-use ractor::{Actor, ActorProcessingErr, ActorRef};
 use std::collections::{HashMap, HashSet};
+
+use ractor::rpc::CallResult;
+use ractor::{pg, registry, Actor, ActorProcessingErr, ActorRef};
 
 /// Well-known process group for shell introspection actors
 pub const INTROSPECTION_GROUP: &str = "ractor_shell_introspection";
@@ -57,7 +58,7 @@ impl Actor for IntrospectionActor {
         node_name: String,
     ) -> Result<Self::State, ActorProcessingErr> {
         // Join the well-known introspection group
-        ractor::pg::join(INTROSPECTION_GROUP.to_string(), vec![myself.get_cell()]);
+        pg::join(INTROSPECTION_GROUP.to_string(), vec![myself.get_cell()]);
 
         Ok(IntrospectionState { node_name })
     }
@@ -70,11 +71,11 @@ impl Actor for IntrospectionActor {
     ) -> Result<(), ActorProcessingErr> {
         match message {
             ShellProtocolMessage::ListRegisteredActors(reply) => {
-                let registered = ractor::registry::registered();
+                let registered = registry::registered();
                 let mut actors = Vec::new();
 
                 for name in registered {
-                    if let Some(cell) = ractor::registry::where_is(name) {
+                    if let Some(cell) = registry::where_is(name) {
                         actors.push(ActorInfo::from_cell(&cell));
                     }
                 }
@@ -83,20 +84,20 @@ impl Actor for IntrospectionActor {
             }
 
             ShellProtocolMessage::GetProcessGroupMembers(group, reply) => {
-                let members = ractor::pg::get_members(&group);
+                let members = pg::get_members(&group);
                 let actors: Vec<ActorInfo> = members.iter().map(ActorInfo::from_cell).collect();
 
                 let _ = reply.send(actors);
             }
 
             ShellProtocolMessage::GetActorInfo(name, reply) => {
-                let info = ractor::registry::where_is(name).map(|cell| ActorInfo::from_cell(&cell));
+                let info = registry::where_is(name).map(|cell| ActorInfo::from_cell(&cell));
 
                 let _ = reply.send(info);
             }
 
             ShellProtocolMessage::StopActor(name) => {
-                if let Some(cell) = ractor::registry::where_is(name) {
+                if let Some(cell) = registry::where_is(name) {
                     cell.stop(Some("Stopped by remote shell".to_string()));
                 }
             }
@@ -131,7 +132,7 @@ async fn send_dynamic_message_to_actor(
     json_value: serde_json::Value,
 ) -> DynamicSendResult {
     // Find the actor in registry
-    let Some(cell) = ractor::registry::where_is(actor_name.to_string()) else {
+    let Some(cell) = registry::where_is(actor_name.to_string()) else {
         return DynamicSendResult::ActorNotFound;
     };
 
@@ -156,7 +157,7 @@ async fn call_dynamic_message_to_actor(
     json_value: serde_json::Value,
 ) -> DynamicCallResult {
     // Find the actor in registry
-    let Some(cell) = ractor::registry::where_is(actor_name.to_string()) else {
+    let Some(cell) = registry::where_is(actor_name.to_string()) else {
         return DynamicCallResult::ActorNotFound;
     };
 
@@ -202,7 +203,7 @@ fn build_cluster_topology(local_node_name: &str) -> ClusterTopology {
     let known_groups = vec!["ping_pong".to_string(), INTROSPECTION_GROUP.to_string()];
 
     for group_name in known_groups {
-        let members = ractor::pg::get_members(&group_name);
+        let members = pg::get_members(&group_name);
         let mut locations = Vec::new();
 
         for cell in members {
@@ -237,13 +238,13 @@ fn build_cluster_topology(local_node_name: &str) -> ClusterTopology {
     }
 
     // Build node list
-    let registered = ractor::registry::registered();
+    let registered = registry::registered();
     let local_actor_count = registered.len();
 
     // Get local node ID from any local actor
     let local_node_id = registered
         .first()
-        .and_then(|name| ractor::registry::where_is(name.clone()))
+        .and_then(|name| registry::where_is(name.clone()))
         .map(|cell| extract_node_id(&cell.get_id().to_string()))
         .unwrap_or_else(|| "0".to_string());
 
