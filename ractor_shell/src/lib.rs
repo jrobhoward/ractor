@@ -58,6 +58,7 @@ use tabled::Tabled;
 
 pub mod commands;
 pub mod completer;
+pub mod completer_custom;
 pub mod config;
 pub mod dynamic;
 pub mod error;

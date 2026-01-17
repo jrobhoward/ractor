@@ -2,8 +2,8 @@
 //!
 //! This file demonstrates various ways to customize tab completion behavior.
 
-use rustyline::completion::{Completer, Pair};
-use rustyline::Context;
+use rustyline::completion::Pair;
+
 use crate::completer::ShellHelper;
 
 // ============================================================================
@@ -177,7 +177,7 @@ pub trait ContextualHints {
 }
 
 impl ContextualHints for ShellHelper {
-    fn get_hint(&self, line: &str, pos: usize) -> Option<String> {
+    fn get_hint(&self, line: &str, _pos: usize) -> Option<String> {
         let parts: Vec<&str> = line.split_whitespace().collect();
 
         if parts.is_empty() {
@@ -185,25 +185,13 @@ impl ContextualHints for ShellHelper {
         }
 
         match parts[0] {
-            "send" if parts.len() == 1 => {
-                Some(" <actor> <json_message>".to_string())
-            }
-            "call" if parts.len() == 1 => {
-                Some(" <actor> <json_message>".to_string())
-            }
-            "info" if parts.len() == 1 => {
-                Some(" <actor_name>".to_string())
-            }
-            "stop" if parts.len() == 1 => {
-                Some(" <actor_name>".to_string())
-            }
-            "pg" if parts.len() == 1 => {
-                Some(" list | members <group>".to_string())
-            }
-            "cluster" if parts.len() == 1 => {
-                Some(" [nodes|groups|actors]".to_string())
-            }
-            _ => None
+            "send" if parts.len() == 1 => Some(" <actor> <json_message>".to_string()),
+            "call" if parts.len() == 1 => Some(" <actor> <json_message>".to_string()),
+            "info" if parts.len() == 1 => Some(" <actor_name>".to_string()),
+            "stop" if parts.len() == 1 => Some(" <actor_name>".to_string()),
+            "pg" if parts.len() == 1 => Some(" list | members <group>".to_string()),
+            "cluster" if parts.len() == 1 => Some(" [nodes|groups|actors]".to_string()),
+            _ => None,
         }
     }
 }
@@ -212,11 +200,21 @@ impl ContextualHints for ShellHelper {
 // EXAMPLE 6: Smart Completion with Ranking
 // ============================================================================
 
-#[derive(Debug)]
 pub struct RankedCandidate {
     pub pair: Pair,
     pub rank: usize,
     pub reason: CompletionReason,
+}
+
+impl std::fmt::Debug for RankedCandidate {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RankedCandidate")
+            .field("display", &self.pair.display)
+            .field("replacement", &self.pair.replacement)
+            .field("rank", &self.rank)
+            .field("reason", &self.reason)
+            .finish()
+    }
 }
 
 #[derive(Debug)]
@@ -306,8 +304,8 @@ pub trait FilePathCompletion {
 
 impl FilePathCompletion for ShellHelper {
     fn complete_file_path(&self, partial_path: &str) -> Vec<Pair> {
-        use std::path::Path;
         use std::fs;
+        use std::path::Path;
 
         let path = Path::new(partial_path);
         let (dir, prefix) = if partial_path.ends_with('/') {
@@ -347,22 +345,5 @@ impl FilePathCompletion for ShellHelper {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_fuzzy_score() {
-        assert!(fuzzy_score("demo", "demo_actor_1") > fuzzy_score("demo", "actor_demo"));
-        assert!(fuzzy_score("da1", "demo_actor_1") > 0);
-        assert_eq!(fuzzy_score("xyz", "demo_actor_1"), 0);
-    }
-
-    #[test]
-    fn test_case_insensitive() {
-        let helper = ShellHelper::new();
-        let candidates = vec!["DemoActor".to_string(), "TestActor".to_string()];
-        let results = helper.complete_case_insensitive("demo", &candidates);
-        assert_eq!(results.len(), 1);
-        assert_eq!(results[0].display, "DemoActor");
-    }
-}
+#[allow(non_snake_case)]
+mod completer_custom_tests;

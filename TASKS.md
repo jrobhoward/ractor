@@ -337,16 +337,22 @@
 
 **Estimated Time**: 2-3 hours
 
-- [ ] **Add WASM compatibility check**
-  - Verify ractor_shell builds for WASM target
-  - May need feature flags to disable rustyline on WASM
+- [x] **WASM compatibility check** - N/A by design
+  - ractor_shell is a native CLI tool requiring terminal I/O, networking, and filesystem
+  - Dependencies (rustyline, tokio/mio, colored) don't support WASM
+  - Core ractor library supports WASM; the shell is intentionally native-only
 
-- [ ] **Add Docker test environment**
-  - Test cluster connections in isolated environment
-  - Multi-node testing
+- [x] **Local cluster test environment**
+  - Created `scripts/test_cluster.sh` for multi-node testing
+  - Starts N nodes on sequential ports with automatic cleanup
+  - Logs output to `/tmp/ractor_node_*.log`
+  - Docker not required for local testing
 
-- [ ] **Add mutation testing**
-  - Use `cargo-mutants` to find untested code paths
+- [ ] **Add mutation testing** (optional/future)
+  - Requires `cargo install cargo-mutants`
+  - Can take significant time to run (re-runs tests many times)
+  - Current test coverage: 71 unit tests + 14 proptest cases
+  - Consider running before major releases
 
 ---
 
