@@ -91,6 +91,15 @@ pub enum ShellError {
     /// Cluster connection error.
     #[error("Cluster error: {0}")]
     ClusterError(String),
+
+    /// IO error during file operations.
+    #[error("IO error during {operation} at '{path}': {source}")]
+    IoError {
+        operation: &'static str,
+        path: String,
+        #[source]
+        source: std::io::Error,
+    },
 }
 
 /// Result type alias for shell operations.

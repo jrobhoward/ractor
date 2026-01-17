@@ -2,7 +2,7 @@
 
 **Branch**: feature/shell
 **Goal**: Prepare ractor_shell for PR to upstream ractor repository
-**Status**: Integration Complete, Pre-PR Cleanup In Progress (1.1 ✅, 1.2 ✅, 1.3 ✅, 1.4 ✅, 1.5 ✅, 2.1 ✅, 2.2 ✅, 2.3 ✅, 2.4 ✅, 3.1 ✅, 5.1-Phase1 ✅)
+**Status**: Integration Complete, Pre-PR Cleanup In Progress (1.1 ✅, 1.2 ✅, 1.3 ✅, 1.4 ✅, 1.5 ✅, 2.1 ✅, 2.2 ✅, 2.3 ✅, 2.4 ✅, 3.1 ✅, 5.1-Phase1 ✅, 5.2 ✅)
 
 **Erlang/OTP Comparison**: See [Feature Comparison](#erlang-otp-feature-comparison) section for gaps analysis vs Erlang shell/Observer.
 
@@ -485,21 +485,31 @@ Inspired by [observer_cli](https://github.com/zhongwencool/observer_cli) and [to
   - Dump current view to JSON
   - Screenshot to file
 
-### 5.2 Tracing Support
+### 5.2 Tracing Support ✅
 
 **Estimated Time**: 6-10 hours
 **Value**: HIGH - One of the most valuable debugging tools in Erlang
+**Status**: Complete
 
-- [ ] **Add `trace` command for message flow**
-  - Trace actor communication patterns
-  - Filter by actor name/pattern
-  - Log messages with timestamps
-  - Implementation: Hook via DynamicMessage actors or shell-side proxy
+- [x] **Add `trace` command for message flow**
+  - Trace actor communication patterns with glob pattern matching
+  - Filter by actor name/pattern (e.g., `trace worker_*`, `trace *`)
+  - Show trace output with timestamps and colored formatting
+  - Implementation: Custom `tracing::Layer` that hooks into ractor's span instrumentation
+  - Commands: `trace [pattern]`, `trace off`, aliases `tr`
   - Erlang equivalent: `dbg`, trace BIFs
 
-- [ ] **Add `trace-to-file` for persistent logging**
-  - Export trace data for offline analysis
-  - Support JSON or structured format
+- [x] **Add `trace-to-file` for persistent logging**
+  - Export trace data to file: `trace-to-file <path> [pattern]`
+  - Support Pretty, JSON, and Compact output formats
+  - File output is additive to console output
+  - Commands: `trace-to-file`, `tracefile`, alias `tf`
+
+**New files:**
+- `src/tracing/mod.rs` - Module exports
+- `src/tracing/layer.rs` - ShellTracingLayer and TracingHandle
+- `src/tracing/filter.rs` - TraceFilter with glob pattern matching
+- `src/tracing/output.rs` - TraceEvent, TraceOutput, output formatting
 
 ### 5.3 Simple Watch Mode (Non-TUI Alternative)
 
@@ -591,7 +601,7 @@ Reference for future development priorities:
 | Message queue depth | - | `message_queue_len` | ❌ Needs core API (4.1) |
 | Supervision trees | `tree` (pg only) | Observer supervision view | ⚠️ Needs core API (4.2) |
 | Link inspection | - | `links`, `monitors` | ❌ Needs core API (4.2) |
-| Tracing | - | `dbg`, trace BIFs | ❌ Planned (5.2) |
+| **Tracing** | `trace`, `trace-to-file` | `dbg`, trace BIFs | ✅ Complete |
 | Live refresh (simple) | `watch` | - | ❌ Planned (5.3) |
 | Memory/reductions | - | `memory`, `reductions` | ❌ Needs core API (4.2) |
 
@@ -706,7 +716,7 @@ From analyzing ractor codebase:
 - **Priority 5 (Shell Enhancements)**: 23-35 hours (no core changes needed)
   - ✅ **5.1 Top/Dashboard TUI Phase 1: Complete**
   - 5.1 Phases 2-3: 4-8 hours (when core APIs available)
-  - 5.2 Tracing: 6-10 hours (HIGH value)
+  - ✅ **5.2 Tracing: Complete**
   - 5.3 Simple Watch Mode: 2-3 hours (MEDIUM value)
   - 5.4 Network Diagnostics: 3-4 hours (MEDIUM value)
   - 5.5 Enhanced Inspection: 2-3 hours (LOW-MEDIUM value)
@@ -716,8 +726,9 @@ From analyzing ractor codebase:
 
 **Recommended next steps (post-PR)**:
 1. ✅ **Priority 5.1 (`top` command) Phase 1** - Complete
-2. Priority 5.2 (Tracing) - Message flow debugging
-3. Priority 4.1 (Core APIs) - Unlocks metrics for `top` Phases 2-3
+2. ✅ **Priority 5.2 (Tracing)** - Complete
+3. Priority 5.3 (Simple Watch Mode) - Lightweight auto-refresh without TUI
+4. Priority 4.1 (Core APIs) - Unlocks metrics for `top` Phases 2-3
 
 ---
 

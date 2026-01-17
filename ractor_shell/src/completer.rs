@@ -66,6 +66,10 @@ impl ShellHelper {
             "monitor",
             "unmonitor",
             "monitors",
+            "top",
+            "trace",
+            "trace-to-file",
+            "tracefile",
             "exit",
             "quit",
         ]
@@ -83,6 +87,9 @@ impl ShellHelper {
             ("l", "load"),
             ("q", "quit"),
             ("exit", "quit"),
+            ("t", "top"),
+            ("tr", "trace"),
+            ("tf", "trace-to-file"),
         ]
     }
 
@@ -92,6 +99,7 @@ impl ShellHelper {
             "pg" => vec!["list", "members"],
             "cluster" => vec!["nodes", "groups", "actors"],
             "use" => vec!["local"],
+            "trace" => vec!["off"],
             _ => vec![],
         }
     }
@@ -360,6 +368,27 @@ impl Completer for ShellHelper {
                     })
                     .collect();
                 return Ok((word_start, candidates));
+            }
+            "trace" | "tr" => {
+                // Complete trace subcommands (just "off" for now)
+                if parts.len() == 2 && !line.ends_with(' ') {
+                    let candidates: Vec<Pair> = Self::subcommands("trace")
+                        .into_iter()
+                        .filter(|s| s.starts_with(current_word))
+                        .map(|s| Pair {
+                            display: s.to_string(),
+                            replacement: s.to_string(),
+                        })
+                        .collect();
+                    return Ok((word_start, candidates));
+                }
+            }
+            "trace-to-file" | "tracefile" | "tf" => {
+                // First argument: file path
+                if parts.len() <= 2 {
+                    let candidates = Self::complete_file_path(current_word);
+                    return Ok((word_start, candidates));
+                }
             }
             _ => {}
         }

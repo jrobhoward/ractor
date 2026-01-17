@@ -69,6 +69,7 @@ pub mod messages;
 pub mod monitor;
 pub mod protocol;
 pub mod table;
+pub mod tracing;
 pub mod tui;
 
 pub use error::{ShellError, ShellResult};
@@ -107,6 +108,8 @@ pub struct ShellState {
     pub cluster_topology: Option<ClusterTopology>,
     /// Monitor actor for tracking actor lifecycle events
     pub monitor_actor: Option<ActorRef<monitor::MonitorMessage>>,
+    /// Handle for controlling actor tracing
+    pub tracing_handle: Option<tracing::TracingHandle>,
     /// Quiet mode - suppresses verbose output (for scripting)
     pub quiet: bool,
 }
@@ -153,6 +156,7 @@ impl ShellState {
             connected_nodes: HashMap::new(),
             cluster_topology: None,
             monitor_actor: Some(monitor_ref),
+            tracing_handle: None, // Initialized on first trace command
             quiet,
         })
     }
@@ -203,6 +207,11 @@ impl ShellState {
             ShellCommand::Unmonitor { actor } => self.cmd_unmonitor(actor).await,
             ShellCommand::Monitors => self.cmd_monitors().await,
             ShellCommand::Top => self.cmd_top().await,
+            ShellCommand::Trace { pattern } => self.cmd_trace(pattern).await,
+            ShellCommand::TraceOff => self.cmd_trace_off().await,
+            ShellCommand::TraceToFile { path, pattern } => {
+                self.cmd_trace_to_file(path, pattern).await
+            }
         }
     }
 
@@ -216,6 +225,153 @@ impl ShellState {
         // Run the TUI - this takes over the terminal
         if let Err(e) = tui::App::run().await {
             eprintln!("{} {}", "TUI error:".red(), e);
+        }
+
+        Ok(())
+    }
+
+    /// Start tracing actors or list active traces.
+    async fn cmd_trace(&mut self, pattern: Option<String>) -> ShellResult<()> {
+        // Initialize tracing handle if not already done
+        if self.tracing_handle.is_none() {
+            let (layer, handle) = tracing::ShellTracingLayer::new();
+
+            // Install the layer with tracing-subscriber
+            use tracing_subscriber::layer::SubscriberExt;
+            use tracing_subscriber::util::SubscriberInitExt;
+
+            // Try to set global subscriber - may fail if already set
+            let _ = tracing_subscriber::registry().with(layer).try_init();
+
+            self.tracing_handle = Some(handle);
+
+            if !self.quiet {
+                println!("{} Tracing system initialized", "✓".green());
+            }
+        }
+
+        let handle = self.tracing_handle.as_ref().unwrap();
+
+        match pattern {
+            Some(pat) => {
+                handle.trace(&pat);
+                println!("{} Tracing actors matching: {}", "✓".green(), pat.cyan());
+
+                // Show all active patterns
+                let patterns = handle.patterns();
+                if patterns.len() > 1 {
+                    println!("{}", "Active trace patterns:".bright_black());
+                    for p in patterns {
+                        println!("  {}", p.cyan());
+                    }
+                }
+            }
+            None => {
+                // List active traces
+                if !handle.is_active() {
+                    println!(
+                        "{}",
+                        "No active traces. Use 'trace <pattern>' to start tracing.".bright_black()
+                    );
+                    println!("{}", "Examples:".bright_black());
+                    println!(
+                        "  {}     - trace actors starting with 'worker_'",
+                        "trace worker_*".cyan()
+                    );
+                    println!("  {}            - trace all actors", "trace *".cyan());
+                    println!("  {}  - stop all tracing", "trace off".cyan());
+                } else {
+                    println!("{}", "Active trace patterns:".bold());
+                    for p in handle.patterns() {
+                        println!("  {}", p.cyan());
+                    }
+                    println!();
+                    println!("{}", "Outputs:".bold());
+                    for o in handle.outputs() {
+                        println!("  {}", o.bright_black());
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Stop all tracing.
+    async fn cmd_trace_off(&mut self) -> ShellResult<()> {
+        if let Some(handle) = &self.tracing_handle {
+            let was_active = handle.is_active();
+            handle.trace_off();
+            handle.clear_file_outputs();
+
+            if was_active {
+                println!("{} Tracing stopped", "✓".green());
+            } else {
+                println!("{}", "No active traces".bright_black());
+            }
+        } else {
+            println!("{}", "Tracing not initialized".bright_black());
+        }
+
+        Ok(())
+    }
+
+    /// Log traces to a file.
+    async fn cmd_trace_to_file(
+        &mut self,
+        path: String,
+        pattern: Option<String>,
+    ) -> ShellResult<()> {
+        // Initialize tracing handle if not already done
+        if self.tracing_handle.is_none() {
+            let (layer, handle) = tracing::ShellTracingLayer::new();
+
+            use tracing_subscriber::layer::SubscriberExt;
+            use tracing_subscriber::util::SubscriberInitExt;
+
+            let _ = tracing_subscriber::registry().with(layer).try_init();
+            self.tracing_handle = Some(handle);
+
+            if !self.quiet {
+                println!("{} Tracing system initialized", "✓".green());
+            }
+        }
+
+        let handle = self.tracing_handle.as_ref().unwrap();
+
+        // Add file output
+        let path_buf = std::path::PathBuf::from(&path);
+        handle
+            .add_file_output(path_buf, tracing::TraceOutputFormat::Pretty)
+            .map_err(|e| ShellError::IoError {
+                operation: "create trace file",
+                path: path.clone(),
+                source: e,
+            })?;
+
+        // If pattern provided, start tracing
+        if let Some(pat) = pattern {
+            handle.trace(&pat);
+            println!(
+                "{} Tracing actors matching '{}' to file: {}",
+                "✓".green(),
+                pat.cyan(),
+                path.bright_black()
+            );
+        } else if !handle.is_active() {
+            // No pattern and no active traces - enable all
+            handle.trace("*");
+            println!(
+                "{} Tracing all actors to file: {}",
+                "✓".green(),
+                path.bright_black()
+            );
+        } else {
+            println!(
+                "{} Added trace output file: {}",
+                "✓".green(),
+                path.bright_black()
+            );
         }
 
         Ok(())
@@ -330,6 +486,42 @@ impl ShellState {
                     println!("  r           Force refresh");
                     println!("  ?           Show help");
                 }
+                "trace" => {
+                    println!("{}", "trace [pattern]".green().bold());
+                    println!("  Trace actor message flow and lifecycle events");
+                    println!("\n{}", "Usage:".bold());
+                    println!("  trace              List active traces");
+                    println!("  trace <pattern>    Start tracing actors matching pattern");
+                    println!("  trace off          Stop all tracing");
+                    println!("\n{}", "Alias:".bold());
+                    println!("  tr");
+                    println!("\n{}", "Patterns:".bold());
+                    println!("  worker_*     Match actors starting with 'worker_'");
+                    println!("  *            Match all actors");
+                    println!("  supervisor   Match exact name 'supervisor'");
+                    println!("\n{}", "Examples:".bold());
+                    println!("  trace worker_*     Start tracing worker actors");
+                    println!("  trace *            Trace all actors");
+                    println!("  trace off          Stop tracing");
+                    println!("\n{}", "Note:".bold());
+                    println!("  Traces show actor span enter/exit and tracing events.");
+                    println!("  Requires actors to use ractor's tracing instrumentation.");
+                }
+                "trace-to-file" | "tracefile" => {
+                    println!("{}", "trace-to-file <path> [pattern]".green().bold());
+                    println!("  Log actor traces to a file");
+                    println!("\n{}", "Usage:".bold());
+                    println!("  trace-to-file <path>           Log all traces to file");
+                    println!("  trace-to-file <path> <pattern> Log matching traces to file");
+                    println!("\n{}", "Alias:".bold());
+                    println!("  tf");
+                    println!("\n{}", "Examples:".bold());
+                    println!("  trace-to-file /tmp/trace.log worker_*");
+                    println!("  trace-to-file ./debug.log");
+                    println!("\n{}", "Note:".bold());
+                    println!("  File output is in addition to console output.");
+                    println!("  Use 'trace off' to stop and close file outputs.");
+                }
                 _ => {
                     println!("{} Unknown command: {}", "Error:".red().bold(), cmd);
                 }
@@ -392,6 +584,13 @@ impl ShellState {
                 "unmonitor <actor>".green()
             );
             println!("  {}          List monitored actors", "monitors".green());
+            println!();
+            println!("{}", "  Tracing:".bright_black());
+            println!(
+                "  {}   Trace actors (pattern or 'off')",
+                "trace [pattern]".green()
+            );
+            println!("  {}  Log traces to file", "trace-to-file <path>".green());
             println!();
             println!("  {}              Exit the shell", "exit".green());
             println!();
@@ -1898,6 +2097,15 @@ pub enum ShellCommand {
     Monitors,
     /// Launch interactive TUI dashboard. Alias: `t`. Usage: `top`
     Top,
+    /// Start tracing actors or list active traces. Usage: `trace [pattern]`
+    Trace { pattern: Option<String> },
+    /// Stop all tracing. Usage: `trace off`
+    TraceOff,
+    /// Log traces to a file. Usage: `trace-to-file <path> [pattern]`
+    TraceToFile {
+        path: String,
+        pattern: Option<String>,
+    },
 }
 
 impl ShellCommand {
@@ -1913,6 +2121,8 @@ impl ShellCommand {
             "l" => "load",
             "q" => "quit",
             "t" => "top",
+            "tr" => "trace",
+            "tf" => "trace-to-file",
             _ => cmd,
         }
     }
@@ -2099,6 +2309,28 @@ impl ShellCommand {
             }
             "monitors" => Ok(ShellCommand::Monitors),
             "top" => Ok(ShellCommand::Top),
+            "trace" => {
+                // "trace off" is a special case
+                if parts.get(1).copied() == Some("off") {
+                    Ok(ShellCommand::TraceOff)
+                } else {
+                    Ok(ShellCommand::Trace {
+                        pattern: parts.get(1).map(|s| s.to_string()),
+                    })
+                }
+            }
+            "trace-to-file" | "tracefile" => {
+                if parts.len() < 2 {
+                    return Err(ShellError::MissingArgument {
+                        command: "trace-to-file",
+                        requirement: "<file_path> [pattern]",
+                    });
+                }
+                Ok(ShellCommand::TraceToFile {
+                    path: parts[1].to_string(),
+                    pattern: parts.get(2).map(|s| s.to_string()),
+                })
+            }
             _ => Err(ShellError::UnknownCommand(parts[0].to_string())),
         }
     }
