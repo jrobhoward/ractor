@@ -1,3 +1,54 @@
+//! # Ractor Shell
+//!
+//! An interactive REPL (Read-Eval-Print Loop) for debugging and observing Ractor actor systems,
+//! inspired by Erlang's `erl` shell.
+//!
+//! ## Features
+//!
+//! - **Actor Introspection**: List and inspect actors via registry and process groups
+//! - **Remote Connections**: Connect to distributed `ractor_cluster` nodes
+//! - **Dynamic Messages**: Send arbitrary JSON messages to actors implementing [`dynamic::DynamicMessage`]
+//! - **Monitoring**: Track actor lifecycle events (start, stop, panic, failure)
+//! - **Cluster Topology**: Visualize mesh topology and cross-cluster process groups
+//! - **Tab Completion**: Context-aware command and argument completion
+//!
+//! ## Quick Start
+//!
+//! ```rust,ignore
+//! use ractor_shell::{ShellState, ShellCommand};
+//! use rustyline::Editor;
+//!
+//! #[tokio::main]
+//! async fn main() -> anyhow::Result<()> {
+//!     let mut state = ShellState::new().await?;
+//!     let mut rl = Editor::<(), _>::new()?;
+//!
+//!     loop {
+//!         let prompt = state.build_prompt();
+//!         match rl.readline(&prompt) {
+//!             Ok(line) => {
+//!                 if let Ok(cmd) = ShellCommand::parse_line(&line) {
+//!                     state.execute(cmd).await?;
+//!                 }
+//!             }
+//!             Err(_) => break,
+//!         }
+//!         if state.should_exit {
+//!             break;
+//!         }
+//!     }
+//!     Ok(())
+//! }
+//! ```
+//!
+//! ## Modules
+//!
+//! - [`dynamic`]: Dynamic message interface for shell-to-actor communication
+//! - [`introspection`]: Remote introspection actor for cross-node queries
+//! - [`monitor`]: Actor lifecycle monitoring
+//! - [`protocol`]: Shell protocol messages for cluster communication
+//! - [`completer`]: Tab completion support
+
 use anyhow::{anyhow, Result};
 use colored::Colorize;
 use ractor::{rpc::CallResult, Actor, ActorRef};
@@ -34,6 +85,10 @@ pub struct ShellState {
 }
 
 impl ShellState {
+    /// Create a new shell state with default configuration.
+    ///
+    /// This spawns the monitor actor and initializes the local node name
+    /// based on the system hostname.
     pub async fn new() -> Result<Self> {
         let local_node_name = format!(
             "shell@{}",
@@ -58,6 +113,9 @@ impl ShellState {
         })
     }
 
+    /// Build the shell prompt string showing current node context.
+    ///
+    /// Returns a colored prompt like `ractor@local > ` or `ractor@node_name > `.
     pub fn build_prompt(&self) -> String {
         let node_indicator = match &self.current_node {
             Some(node) => format!("@{}", node),
@@ -71,6 +129,9 @@ impl ShellState {
         )
     }
 
+    /// Execute a shell command.
+    ///
+    /// This is the main dispatch method that routes commands to their handlers.
     pub async fn execute(&mut self, cmd: ShellCommand) -> Result<()> {
         match cmd {
             ShellCommand::Help { command } => self.cmd_help(command).await,
@@ -1536,30 +1597,55 @@ impl ShellState {
     }
 }
 
-/// Shell commands
+/// Shell commands that can be executed in the REPL.
+///
+/// Commands are parsed from user input via [`ShellCommand::parse_line`] and
+/// executed via [`ShellState::execute`].
 #[derive(Debug, Clone)]
 pub enum ShellCommand {
+    /// Display help information. Alias: `help [command]`
     Help { command: Option<String> },
+    /// Exit the shell. Aliases: `exit`, `quit`, `q`
     Exit,
+    /// List all actors (registered and in process groups). Alias: `a`
     Actors,
+    /// List registered actors only. Alias: `r`
     Registry,
+    /// List all process groups. Usage: `pg list`
     PgList,
+    /// List members of a process group. Usage: `pg members <group>`
     PgMembers { group: String },
+    /// Show detailed information about an actor. Alias: `i`
     Info { actor: String },
+    /// Send a cast message to an actor. Alias: `s`. Usage: `send <actor> <json>`
     Send { actor: String, message: String },
+    /// Send an RPC call to an actor. Alias: `c`. Usage: `call <actor> <json>`
     Call { actor: String, message: String },
+    /// Stop an actor gracefully. Usage: `stop <actor>`
     Stop { actor: String },
+    /// Connect to a remote node. Usage: `connect <host:port>`
     Connect { host: String },
+    /// Disconnect from a remote node. Usage: `disconnect <node>`
     Disconnect { node: String },
+    /// List connected nodes
     Nodes,
+    /// Switch context to a remote node. Usage: `use <node>` or `use local`
     Use { node: String },
+    /// Show cluster topology. Usage: `cluster [nodes|groups|mesh]`
     Cluster { subcommand: Option<String> },
+    /// Show system statistics
     Stats,
+    /// Show supervision tree (limited in Phase 1)
     Tree { actor: Option<String> },
+    /// Send a JSON file as a message. Alias: `sf`. Usage: `send-file <actor> <path>`
     SendFile { actor: String, file_path: String },
+    /// Load and execute a script file. Alias: `l`. Usage: `load <path>`
     Load { script_path: String },
+    /// Start monitoring an actor's lifecycle. Usage: `monitor <actor>`
     Monitor { actor: String },
+    /// Stop monitoring an actor. Usage: `unmonitor <actor>`
     Unmonitor { actor: String },
+    /// List all monitored actors and recent events
     Monitors,
 }
 
@@ -1579,6 +1665,10 @@ impl ShellCommand {
         }
     }
 
+    /// Parse a command line string into a ShellCommand.
+    ///
+    /// Supports command aliases (e.g., `a` for `actors`, `q` for `quit`).
+    /// Returns an error if the command is not recognized or missing required arguments.
     pub fn parse_line(line: &str) -> Result<Self> {
         let mut parts: Vec<&str> = line.split_whitespace().collect();
 

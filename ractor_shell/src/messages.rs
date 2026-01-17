@@ -1,12 +1,15 @@
+//! Message Construction from JSON or String Input
+//!
+//! This module handles parsing user input into actor messages.
+//! Due to Ractor's strongly-typed message system, we focus on
+//! well-known message types that can be serialized.
+
 use anyhow::{anyhow, Result};
 use serde_json::Value;
 
-/// Message construction from JSON or string input
+/// Attempt to parse a JSON string into a structured value.
 ///
-/// This module handles parsing user input into actor messages.
-/// Due to Ractor's strongly-typed message system, we focus on
-/// well-known message types that can be serialized.
-/// Attempt to parse a JSON string into a structured value
+/// Returns the parsed JSON value, or an error if the input is not valid JSON.
 pub fn parse_json_input(input: &str) -> Result<Value> {
     // Try to parse as JSON first
     if let Ok(value) = serde_json::from_str::<Value>(input) {

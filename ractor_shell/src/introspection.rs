@@ -1,3 +1,26 @@
+//! Introspection Actor for Remote Shell Queries
+//!
+//! This module provides the [`IntrospectionActor`] which enables remote shells to query
+//! actor information across distributed nodes.
+//!
+//! ## Usage
+//!
+//! When connecting to a remote node, the shell looks for `IntrospectionActor` instances
+//! in the well-known process group [`INTROSPECTION_GROUP`]. These actors respond to
+//! queries about registered actors, process groups, and cluster topology.
+//!
+//! ```rust,ignore
+//! use ractor::Actor;
+//! use ractor_shell::introspection::IntrospectionActor;
+//!
+//! // Spawn an introspection actor on your node
+//! let (actor_ref, _) = Actor::spawn(
+//!     Some("introspection".to_string()),
+//!     IntrospectionActor,
+//!     "my_node".to_string(),
+//! ).await?;
+//! ```
+
 use crate::protocol::{ActorInfo, ActorLocation, ClusterTopology, NodeInfo, ShellProtocolMessage};
 use ractor::{Actor, ActorProcessingErr, ActorRef};
 use std::collections::{HashMap, HashSet};
@@ -5,10 +28,15 @@ use std::collections::{HashMap, HashSet};
 /// Well-known process group for shell introspection actors
 pub const INTROSPECTION_GROUP: &str = "ractor_shell_introspection";
 
-/// Actor that provides introspection capabilities for remote shells
+/// Actor that provides introspection capabilities for remote shells.
+///
+/// This actor responds to [`ShellProtocolMessage`] queries, allowing remote shells
+/// to inspect actors, process groups, and cluster topology on this node.
 pub struct IntrospectionActor;
 
+/// State for the introspection actor
 pub struct IntrospectionState {
+    /// Name of this node in the cluster
     pub node_name: String,
 }
 

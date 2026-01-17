@@ -1,3 +1,17 @@
+//! Shell Protocol Messages
+//!
+//! Defines the message types used for communication between the shell and remote
+//! introspection actors. These messages are designed to work over `ractor_cluster`
+//! network connections.
+//!
+//! ## Message Types
+//!
+//! - [`ShellProtocolMessage`]: RPC messages for querying remote nodes
+//! - [`ActorInfo`]: Serializable actor metadata
+//! - [`ClusterTopology`]: Cluster-wide topology information
+//! - [`NodeInfo`]: Information about a single node
+//! - [`ActorLocation`]: Actor location within the cluster
+
 use ractor::RpcReplyPort;
 use ractor_cluster::RactorClusterMessage;
 use serde::{Deserialize, Serialize};
@@ -30,16 +44,21 @@ pub enum ShellProtocolMessage {
     GetClusterTopology(RpcReplyPort<ClusterTopology>),
 }
 
-/// Information about an actor (serializable)
+/// Information about an actor (serializable across network)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ActorInfo {
+    /// Actor's unique identifier
     pub id: String,
+    /// Actor's registered name, if any
     pub name: Option<String>,
+    /// Current actor status (e.g., "Running", "Stopped")
     pub status: String,
+    /// Whether this actor is on the local node
     pub is_local: bool,
 }
 
 impl ActorInfo {
+    /// Create ActorInfo from an ActorCell reference
     pub fn from_cell(cell: &ractor::ActorCell) -> Self {
         Self {
             id: cell.get_id().to_string(),
@@ -75,8 +94,12 @@ pub struct NodeInfo {
 /// Location of an actor in the cluster
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ActorLocation {
+    /// Actor's unique identifier
     pub actor_id: String,
+    /// Actor's registered name, if any
     pub actor_name: Option<String>,
+    /// ID of the node hosting this actor
     pub node_id: String,
+    /// Name of the node hosting this actor
     pub node_name: String,
 }

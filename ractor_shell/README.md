@@ -2,6 +2,25 @@
 
 Interactive REPL for Ractor actor systems, inspired by Erlang's `erl` shell.
 
+## Requirements
+
+- **Rust**: 1.75+ (uses native async fn in traits)
+- **Runtime**: Tokio (full features)
+- **Workspace**: This crate is an optional workspace member of ractor. It is **not** built by default.
+
+### Building
+
+```bash
+# Build ractor_shell specifically
+cargo build -p ractor_shell
+
+# Run the demo example
+cargo run --example demo -p ractor_shell
+
+# Install the shell binary
+cargo install --path ractor_shell
+```
+
 ## Status: Phases 2, 3, 4, 5, 6 & 7 Complete ✓
 
 Full cluster topology awareness, enhanced introspection, file-based message/script input, actor lifecycle monitoring, and delightful UX with tab completion and aliases.
