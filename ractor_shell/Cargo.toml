@@ -31,3 +31,11 @@ anyhow = "1"  # Used in main.rs and examples for top-level error handling
 dirs = "5"
 hostname = "0.3"
 chrono = "0.4"
+
+[dev-dependencies]
+proptest = "1"
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "shell_bench"
+harness = false

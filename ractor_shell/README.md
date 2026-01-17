@@ -307,28 +307,83 @@ ractor@local > stop demo_actor_1
 ## Architecture
 
 ```
-┌─────────────────────────────────┐
-│         ractor-shell            │
-├─────────────────────────────────┤
-│  ┌──────────┐  ┌──────────────┐ │
-│  │ REPL     │→ │ ShellState   │ │
-│  │ Loop     │  │ Coordinator  │ │
-│  └──────────┘  └──────────────┘ │
-│       ↓               ↓          │
-│  ┌──────────┐  ┌──────────────┐ │
-│  │ rustyline│  │ Command      │ │
-│  │ readline │  │ Dispatcher   │ │
-│  └──────────┘  └──────────────┘ │
-└─────────────────────────────────┘
-         ↓
-┌─────────────────────────────────┐
-│      Ractor Runtime             │
-│  ┌──────────┐  ┌──────────────┐ │
-│  │ Registry │  │ Process      │ │
-│  │          │  │ Groups       │ │
-│  └──────────┘  └──────────────┘ │
-└─────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│                         ractor_shell                              │
+├──────────────────────────────────────────────────────────────────┤
+│                                                                   │
+│  ┌────────────┐      ┌─────────────────────────────────────────┐ │
+│  │   REPL     │      │             ShellState                  │ │
+│  │   Loop     │─────▶│  - current_node (local/remote context)  │ │
+│  │            │      │  - connected_nodes                      │ │
+│  │ rustyline  │      │  - cluster_topology (cached)            │ │
+│  │ - history  │      │  - monitor_actor                        │ │
+│  │ - complete │      └─────────────────────────────────────────┘ │
+│  └────────────┘                      │                           │
+│        │                             │ execute(cmd)              │
+│        ▼                             ▼                           │
+│  ┌────────────┐      ┌─────────────────────────────────────────┐ │
+│  │ShellCommand│      │         Command Dispatcher              │ │
+│  │ parse_line │      │                                         │ │
+│  │            │      │  Local Path          Remote Path        │ │
+│  │ - aliases  │      │  ractor::registry ─┐ ┌─ RPC call        │ │
+│  │ - args     │      │  ractor::pg ───────┼─┼─▶ to remote      │ │
+│  └────────────┘      │                    │ │   Introspection  │ │
+│                      └────────────────────┼─┼──────────────────┘ │
+│                                           │ │                    │
+│  ┌────────────────────────────────────────┼─┼──────────────────┐ │
+│  │              MonitorActor              │ │                  │ │
+│  │  - Tracks monitored actors             │ │                  │ │
+│  │  - Receives SupervisionEvents          │ │                  │ │
+│  │  - Displays lifecycle events           │ │                  │ │
+│  └────────────────────────────────────────┼─┼──────────────────┘ │
+└───────────────────────────────────────────┼─┼────────────────────┘
+                                            │ │
+               ┌────────────────────────────┘ │
+               │                              │
+               ▼                              ▼
+┌──────────────────────────────┐  ┌──────────────────────────────┐
+│       Ractor Runtime         │  │       Remote Node            │
+├──────────────────────────────┤  ├──────────────────────────────┤
+│  ┌──────────┐  ┌──────────┐  │  │  ┌────────────────────────┐  │
+│  │ Registry │  │ Process  │  │  │  │  IntrospectionActor    │  │
+│  │          │  │ Groups   │  │  │  │                        │  │
+│  │ Named    │  │          │  │  │  │  Joins pg group:       │  │
+│  │ actors   │  │ pg join  │  │  │  │  ractor_shell_         │  │
+│  │          │  │ pg get   │  │  │  │    introspection       │  │
+│  └──────────┘  └──────────┘  │  │  │                        │  │
+│                              │  │  │  Responds to:          │  │
+│  ┌──────────────────────────┐│  │  │  - ListActors          │  │
+│  │   User Actors            ││  │  │  - GetInfo             │  │
+│  │   (DynamicMessage opt-in)││  │  │  - GetTopology         │  │
+│  └──────────────────────────┘│  │  └────────────────────────┘  │
+└──────────────────────────────┘  └──────────────────────────────┘
 ```
+
+### Component Flows
+
+**Local Introspection Flow:**
+```
+User → "actors" → ShellState.execute() → ractor::registry::registered()
+                                      → Display table
+```
+
+**Remote Introspection Flow:**
+```
+User → "actors" → ShellState.execute() → RPC to IntrospectionActor
+                                      → Receives Vec<ActorInfo>
+                                      → Display table
+```
+
+**Monitor Flow:**
+```
+User → "monitor foo" → MonitorActor → Stores actor_id in map
+           ↓
+    ... actor stops ...
+           ↓
+SupervisionEvent → MonitorActor → Format & display event
+```
+
+For detailed architecture documentation, see [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## Roadmap
 

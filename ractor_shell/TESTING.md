@@ -190,3 +190,82 @@ async fn DynamicMessage___call_with_ping_command___returns_success_response() {
 - Use the same `subject___condition___expected` naming pattern
 - Use Arrange-Act-Assert with whitespace separation
 - Clean up actors with `.stop(None)` after each test
+
+## Property-Based Tests
+
+Property-based tests use `proptest` to generate random inputs and verify invariants.
+
+Location: `tests/proptest_tests.rs`
+
+```rust
+#![allow(non_snake_case)]
+
+use proptest::prelude::*;
+
+proptest! {
+    #[test]
+    fn parse_line___any_string___does_not_panic(input in ".*") {
+        let _ = ShellCommand::parse_line(&input);
+    }
+
+    #[test]
+    fn parse_line___valid_command___parses_successfully(
+        cmd in prop_oneof![Just("actors"), Just("registry"), Just("nodes")]
+    ) {
+        let result = ShellCommand::parse_line(cmd);
+
+        prop_assert!(result.is_ok());
+    }
+}
+```
+
+**Run property tests:**
+```bash
+cargo test --package ractor_shell --test proptest_tests
+```
+
+## Benchmarks
+
+Benchmarks use `criterion` and live in `benches/shell_bench.rs`.
+
+```rust
+use criterion::{black_box, criterion_group, criterion_main, Criterion};
+
+fn bench_command_parsing(c: &mut Criterion) {
+    c.bench_function("parse_actors", |b| {
+        b.iter(|| ShellCommand::parse_line(black_box("actors")))
+    });
+}
+
+criterion_group!(benches, bench_command_parsing);
+criterion_main!(benches);
+```
+
+**Run benchmarks:**
+```bash
+cargo bench -p ractor_shell
+```
+
+Benchmark results are saved to `target/criterion/` with HTML reports.
+
+## Test Coverage
+
+Measure test coverage using `cargo-tarpaulin`:
+
+```bash
+# Install tarpaulin
+cargo install cargo-tarpaulin
+
+# Run coverage for ractor_shell
+cargo tarpaulin --package ractor_shell --out Html
+
+# View report
+open tarpaulin-report.html
+```
+
+**Coverage targets:**
+- Core command parsing: >90%
+- Error handling: >80%
+- Overall: >70%
+
+**Note:** Some code paths (remote connections, cluster operations) are difficult to test without a full cluster setup and may have lower coverage.
