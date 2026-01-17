@@ -377,8 +377,8 @@ ractor@local > cluster          # Show cluster topology
 
 # Raft commands (after connecting to a cluster node)
 ractor@local > connect 127.0.0.1:9001
-ractor@local > call raft_node {"command": "status"}
-ractor@local > call raft_node {"command": "is_leader"}
+ractor@127.0.0.1:9001 > call raft_node GetStatus {}
+ractor@127.0.0.1:9001 > call raft_node IsLeader {}
 ```
 
 ### Dynamic Message Interface

@@ -6,15 +6,17 @@
 # Nodes automatically connect and elect a leader.
 #
 # Usage:
-#   ./scripts/test_cluster.sh           # Start 3 nodes + shell (default)
-#   ./scripts/test_cluster.sh --nodes 5 # Start 5 nodes + shell
-#   ./scripts/test_cluster.sh --no-shell # Start nodes only (for manual testing)
+#   ./scripts/test_cluster.sh              # Start 3 nodes + shell (default)
+#   ./scripts/test_cluster.sh --nodes 5    # Start 5 nodes + shell
+#   ./scripts/test_cluster.sh --no-shell   # Start nodes only (for manual testing)
+#   ./scripts/test_cluster.sh --trace      # Enable trace-level logging
+#   ./scripts/test_cluster.sh --debug      # Enable debug-level logging
 #
-# Raft Commands (via shell):
-#   call raft_node {"command": "is_leader"}   - Check if node is leader
-#   call raft_node {"command": "get_leader"}  - Get current leader name
-#   call raft_node {"command": "status"}      - Get full status
-#   call raft_node {"command": "peers"}       - List connected peers
+# Raft Commands (via shell using typed RPC):
+#   call raft_node IsLeader {}   - Check if node is leader
+#   call raft_node GetLeader {}  - Get current leader name
+#   call raft_node GetStatus {}  - Get full status
+#   call raft_node GetPeers {}   - List connected peers
 #
 
 set -e
@@ -28,6 +30,7 @@ NUM_NODES=3
 START_PORT=9001
 COOKIE="secret_cookie"
 START_SHELL=true
+LOG_LEVEL="info"  # info, debug, or trace
 PIDS=()
 
 # Colors for output
@@ -53,18 +56,21 @@ print_usage() {
     echo "  --port PORT    Starting port number (default: 9001)"
     echo "  --cookie STR   Cluster authentication cookie (default: secret_cookie)"
     echo "  --no-shell     Don't start the interactive shell"
+    echo "  --debug        Enable debug-level Raft logging to files"
+    echo "  --trace        Enable trace-level Raft logging (verbose)"
     echo "  --help         Show this help message"
     echo
     echo "Examples:"
     echo "  $0                    # Start 3-node Raft cluster + shell"
     echo "  $0 --nodes 5          # Start 5-node cluster + shell"
     echo "  $0 --no-shell         # Start cluster only (for manual testing)"
+    echo "  $0 --trace            # Start with verbose tracing to log files"
     echo
     echo "Raft Commands (use via shell 'call' command):"
-    echo "  {\"command\": \"is_leader\"}   - Check if node is the leader"
-    echo "  {\"command\": \"get_leader\"}  - Get current leader name"
-    echo "  {\"command\": \"status\"}      - Get full node status"
-    echo "  {\"command\": \"peers\"}       - List connected peers"
+    echo "  IsLeader {}   - Check if node is the leader"
+    echo "  GetLeader {}  - Get current leader name"
+    echo "  GetStatus {}  - Get full node status"
+    echo "  GetPeers {}   - List connected peers"
     echo
 }
 
@@ -106,6 +112,14 @@ while [[ $# -gt 0 ]]; do
             START_SHELL=false
             shift
             ;;
+        --debug)
+            LOG_LEVEL="debug"
+            shift
+            ;;
+        --trace)
+            LOG_LEVEL="trace"
+            shift
+            ;;
         --help)
             print_usage
             exit 0
@@ -137,8 +151,26 @@ cargo build --example demo -p ractor_shell --quiet
 echo -e "${GREEN}Build complete.${NC}"
 echo
 
+# Set up RUST_LOG based on log level
+# Note: We intentionally exclude ractor_cluster debug logs as they're extremely
+# verbose (logs every network SEND/RECEIVE). Use --cluster-debug if you need them.
+case $LOG_LEVEL in
+    trace)
+        export RUST_LOG="ractor_shell::raft=trace"
+        ;;
+    debug)
+        export RUST_LOG="ractor_shell::raft=debug"
+        ;;
+    *)
+        export RUST_LOG="ractor_shell::raft=info"
+        ;;
+esac
+
 # Start cluster nodes
 echo -e "${YELLOW}Starting $NUM_NODES-node Raft cluster...${NC}"
+if [ "$LOG_LEVEL" != "info" ]; then
+    echo -e "  Log level: ${CYAN}$LOG_LEVEL${NC} (RUST_LOG=$RUST_LOG)"
+fi
 echo
 
 NODE_ADDRS=()
@@ -239,6 +271,12 @@ for i in $(seq 1 $NUM_NODES); do
     echo "    /tmp/ractor_${NAME}.log"
 done
 echo
+if [ "$LOG_LEVEL" != "info" ]; then
+    echo -e "  ${YELLOW}Trace logging enabled!${NC} Watch logs with:"
+    echo
+    echo -e "    ${GREEN}tail -f /tmp/ractor_node_*.log${NC}"
+    echo
+fi
 
 if [ "$START_SHELL" = true ]; then
     echo -e "${CYAN}────────────────────────────────────────────────────────────${NC}"
@@ -253,10 +291,10 @@ if [ "$START_SHELL" = true ]; then
     echo "  Connect to a node and query Raft status:"
     echo
     echo -e "    ${GREEN}connect 127.0.0.1:$START_PORT${NC}"
-    echo -e "    ${GREEN}call raft_node {\"command\": \"is_leader\"}${NC}"
-    echo -e "    ${GREEN}call raft_node {\"command\": \"get_leader\"}${NC}"
-    echo -e "    ${GREEN}call raft_node {\"command\": \"status\"}${NC}"
-    echo -e "    ${GREEN}call raft_node {\"command\": \"peers\"}${NC}"
+    echo -e "    ${GREEN}call raft_node IsLeader {}${NC}"
+    echo -e "    ${GREEN}call raft_node GetLeader {}${NC}"
+    echo -e "    ${GREEN}call raft_node GetStatus {}${NC}"
+    echo -e "    ${GREEN}call raft_node GetPeers {}${NC}"
     echo
     echo "  Check multiple nodes:"
     echo

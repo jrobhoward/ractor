@@ -1,4 +1,5 @@
 //! Tests for Raft leader election
+#![allow(non_snake_case)]
 
 use super::*;
 

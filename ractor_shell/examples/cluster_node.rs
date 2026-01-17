@@ -89,8 +89,8 @@ struct Args {
     #[arg(long, default_value = "300")]
     election_timeout_max: u64,
 
-    /// Heartbeat interval in ms
-    #[arg(long, default_value = "50")]
+    /// Heartbeat interval in ms (lower = faster leader detection, but more network traffic)
+    #[arg(long, default_value = "100")]
     heartbeat_interval: u64,
 }
 

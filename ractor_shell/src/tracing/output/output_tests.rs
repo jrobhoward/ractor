@@ -1,4 +1,5 @@
 //! Tests for TraceOutput
+#![allow(non_snake_case)]
 
 use super::*;
 
