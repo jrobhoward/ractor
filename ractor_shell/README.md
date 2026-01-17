@@ -248,11 +248,92 @@ ractor@local > stop my_actor
 
 See [MONITORING.md](MONITORING.md) for details.
 
+## Configuration
+
+The shell reads configuration from `~/.ractor_shell.toml` if it exists.
+
+### Example Configuration
+
+```toml
+# ~/.ractor_shell.toml
+
+# Edit mode: "vi" (default) or "emacs"
+# Vi mode uses vim-style keybindings (Esc for normal mode, i for insert, etc.)
+# Emacs mode uses readline-style keybindings (Ctrl-A, Ctrl-E, etc.)
+edit_mode = "vi"
+
+# Tab completion type: "list" (default) or "circular"
+#   list     - shows all matching completions below the prompt
+#   circular - cycles through completions with repeated Tab presses
+completion_type = "list"
+
+# RPC timeout in seconds (default: 5)
+rpc_timeout_secs = 5
+
+# Default node server port when connecting to remote nodes (default: 9100)
+node_server_port = 9100
+
+# Cluster authentication cookie (default: "secret_cookie")
+cluster_cookie = "my_secret_cookie"
+
+# Auto-connect to a node on startup
+# auto_connect = "127.0.0.1:9002"
+
+# Color output: "auto", "always", or "never" (default: "auto")
+color = "auto"
+
+# History file location (default: ~/.ractor_shell_history)
+# history_file = "/custom/path/history"
+
+# Maximum history entries (default: 1000)
+max_history = 1000
+```
+
+### Configuration Options
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `edit_mode` | `"vi"` | Line editing mode: `"vi"` or `"emacs"` |
+| `completion_type` | `"list"` | Tab completion behavior: `"list"` (show all matches) or `"circular"` (cycle through) |
+| `rpc_timeout_secs` | `5` | Timeout for RPC calls to actors |
+| `node_server_port` | `9100` | Default port when connecting to remote nodes |
+| `cluster_cookie` | `"secret_cookie"` | Authentication cookie for cluster connections |
+| `auto_connect` | (none) | Auto-connect to this address on startup |
+| `color` | `"auto"` | Color output: `"auto"`, `"always"`, or `"never"` |
+| `history_file` | `~/.ractor_shell_history` | Path to command history file |
+| `max_history` | `1000` | Maximum number of history entries to retain |
+
+### Vi Mode Keys
+
+When `edit_mode = "vi"` (the default):
+
+- **Insert mode** (default when typing): Type normally
+- **Esc**: Enter normal mode
+- **i**: Enter insert mode
+- **h/l**: Move cursor left/right (normal mode)
+- **w/b**: Move by word (normal mode)
+- **0/$**: Move to start/end of line (normal mode)
+- **x**: Delete character (normal mode)
+- **dd**: Delete line (normal mode)
+
+### Emacs Mode Keys
+
+When `edit_mode = "emacs"`:
+
+- **Ctrl-A/Ctrl-E**: Move to start/end of line
+- **Ctrl-F/Ctrl-B**: Move forward/backward one character
+- **Alt-F/Alt-B**: Move forward/backward one word
+- **Ctrl-K**: Kill to end of line
+- **Ctrl-U**: Kill to start of line
+- **Ctrl-W**: Kill previous word
+
 ## Use in Your Code
 
 ```rust
+use ractor_shell::completer::{get_known_process_groups, update_completer_state, ShellHelper};
+use ractor_shell::config::ShellConfig;
 use ractor_shell::{ShellCommand, ShellState};
-use rustyline::DefaultEditor;
+use rustyline::{Config, Editor};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -263,11 +344,29 @@ async fn main() -> anyhow::Result<()> {
         (),
     ).await?;
 
-    // Start the shell
+    // Start the shell with config-based editor
     let mut state = ShellState::new().await?;
-    let mut rl = DefaultEditor::new()?;
+
+    // Load config from ~/.ractor_shell.toml
+    let config = ShellConfig::load();
+    let rl_config = Config::builder()
+        .edit_mode(config.get_edit_mode())
+        .completion_type(config.get_completion_type())
+        .build();
+
+    let helper = ShellHelper::new();
+    let mut rl = Editor::with_config(rl_config)?;
+    rl.set_helper(Some(helper));
 
     loop {
+        // Update tab completion with current actor/group names
+        if let Some(helper) = rl.helper_mut() {
+            let actor_names = ractor::registry::registered();
+            let process_groups = get_known_process_groups();
+            let node_names = state.connected_nodes.keys().cloned().collect();
+            update_completer_state(helper, actor_names, process_groups, node_names);
+        }
+
         let prompt = state.build_prompt();
         match rl.readline(&prompt) {
             Ok(line) => {
