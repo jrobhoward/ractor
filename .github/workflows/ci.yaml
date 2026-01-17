@@ -53,6 +53,9 @@ jobs:
           - name: Test ractor without output-port-v2 feature (explicit)
             package: ractor
             flags: --no-default-features -F tokio_runtime,message_span_propogation
+          - name: Test ractor_shell
+            package: ractor_shell
+            # flags:
 
     steps:
       - uses: actions/checkout@main

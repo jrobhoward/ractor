@@ -7,6 +7,30 @@ possible.
 
 Duh.
 
+## Workspace Structure
+
+This repository is a Cargo workspace with multiple crates:
+
+- **ractor**: Core actor framework (default member)
+- **ractor_cluster**: Distributed cluster support (default member)
+- **ractor_cluster_derive**: Procedural macros (default member)
+- **ractor_shell**: Interactive debugging REPL (**optional**, not built by default)
+
+### Building ractor_shell
+
+The `ractor_shell` crate is excluded from default workspace builds to keep the core library lightweight. To work with it:
+
+```bash
+# Build ractor_shell specifically
+cargo build -p ractor_shell
+
+# Run ractor_shell tests
+cargo test -p ractor_shell
+
+# Run ractor_shell examples
+cargo run --example demo -p ractor_shell
+```
+
 ## Pull Requests
 
 We actively welcome your pull requests!

@@ -2,7 +2,7 @@
 
 **Branch**: feature/shell
 **Goal**: Prepare ractor_shell for PR to upstream ractor repository
-**Status**: Integration Complete, Pre-PR Cleanup In Progress (1.1 ✅, 1.2 ✅, 1.3 ✅)
+**Status**: Integration Complete, Pre-PR Cleanup In Progress (1.1 ✅, 1.2 ✅, 1.3 ✅, 1.4 ✅, 1.5 ✅)
 
 ---
 
@@ -113,56 +113,63 @@
   - `cargo clippy --package ractor_shell --tests --examples -- -D warnings` ✓
   - `cargo fmt --package ractor_shell -- --check` ✓
 
-### 1.4 Dependencies Audit
+### 1.4 Dependencies Audit ✅
 
 **Estimated Time**: 1-2 hours
+**Status**: Complete
 
-- [ ] **Review ractor_shell dependencies**
+- [x] **Review ractor_shell dependencies**
   - File: `ractor_shell/Cargo.toml`
-  - Ensure versions align with workspace dependencies where possible
-  - Minimize dependency count (consider if all are necessary)
-  - Check for duplicates in `Cargo.lock`
+  - Workspace doesn't define `[workspace.dependencies]`, so versions managed per-crate
+  - All dependency versions are reasonable and current
+  - Checked `Cargo.lock` for duplicates - only transitive duplicates (not ractor_shell's concern)
 
-- [ ] **Verify minimal dependency set**
-  - Current dependencies:
-    - `ractor` (workspace) ✓
-    - `ractor_cluster` (workspace) ✓
-    - `tokio` - Required
-    - `clap` - Required for CLI
-    - `rustyline` - Required for REPL
-    - `serde`/`serde_json` - Required for dynamic messages
-    - `tabled` - Required for table formatting
-    - `colored` - Nice to have, consider making optional
-    - `anyhow` - Good for error handling
-    - `dirs` - For history file location
-    - `hostname` - For prompt display
-    - `chrono` - For timestamps
+- [x] **Verify minimal dependency set**
+  All 12 dependencies are necessary and actively used:
+  - `ractor` (workspace path) ✓ - Core actor framework
+  - `ractor_cluster` (workspace path) ✓ - Cluster/remote support
+  - `tokio` ✓ - Async runtime (required)
+  - `clap` ✓ - CLI argument parsing (`--connect` flag)
+  - `rustyline` ✓ - REPL readline support (essential)
+  - `serde`/`serde_json` ✓ - JSON for dynamic messages (essential)
+  - `tabled` ✓ - Table output formatting (essential for UX)
+  - `colored` ✓ - Colored terminal output (integral to UX)
+  - `anyhow` ✓ - Error handling (essential)
+  - `dirs` ✓ - History file location (~/.ractor_shell_history)
+  - `hostname` ✓ - System hostname for prompt
+  - `chrono` ✓ - Timestamps in monitoring (23 usages)
 
-- [ ] **Consider feature flags for optional deps**
-  - Make `colored` optional with feature flag?
-  - Make `chrono` optional (monitoring timestamps)?
+- [x] **Consider feature flags for optional deps**
+  **Decision: Not recommended** for colored/chrono:
+  - `colored` is used throughout lib.rs, main.rs, monitor.rs - integral to UX
+  - `chrono` is used 23 times in lib.rs and monitor.rs - integral to monitoring
+  - Making them optional would require extensive conditional compilation
+  - Both are fundamental to the shell's user experience
+  - Added complexity would outweigh minimal dependency savings
 
-### 1.5 CI/CD Integration
+### 1.5 CI/CD Integration ✅
 
 **Estimated Time**: 1-2 hours
+**Status**: Complete
 
-- [ ] **Update CI workflow to test ractor_shell**
+- [x] **Update CI workflow to test ractor_shell**
   - File: `.github/workflows/ci.yaml`
-  - Add test job for ractor_shell:
+  - Added test job for ractor_shell to matrix:
     ```yaml
     - name: Test ractor_shell
       package: ractor_shell
-      flags:
+      # flags:
     ```
 
-- [ ] **Ensure ractor_shell doesn't break existing CI**
-  - Verify `cargo test` still works (default members)
-  - Verify `cargo clippy --all` passes
-  - Verify `cargo fmt --all -- --check` passes
+- [x] **Ensure ractor_shell doesn't break existing CI**
+  - `cargo test` ✓ (default members still work)
+  - `cargo clippy --all -- -D clippy::all -D warnings` ✓
+  - `cargo fmt --all -- --check` ✓
 
-- [ ] **Document exclusion from default build**
-  - Add note to CONTRIBUTING.md about ractor_shell being optional
-  - Mention in PR description
+- [x] **Document exclusion from default build**
+  - Added "Workspace Structure" section to CONTRIBUTING.md
+  - Documents ractor_shell as optional, not built by default
+  - Includes build commands for working with ractor_shell
 
 ---
 
@@ -347,13 +354,13 @@ These require changes to ractor core and should be separate PRs:
 
 ### Pre-Submission
 
-- [ ] All Priority 1 tasks completed
-- [ ] All tests pass: `cargo test --workspace`
-- [ ] Clippy passes: `cargo clippy --all -- -D clippy::all -D warnings`
-- [ ] Rustfmt passes: `cargo fmt --all -- --check`
-- [ ] Documentation builds: `cargo doc --package ractor_shell --no-deps`
-- [ ] Examples run successfully
-- [ ] No ractor_experiments references remain
+- [x] All Priority 1 tasks completed (1.1 ✅, 1.2 ✅, 1.3 ✅, 1.4 ✅, 1.5 ✅)
+- [x] All tests pass: `cargo test --workspace` (59 tests)
+- [x] Clippy passes: `cargo clippy --all -- -D clippy::all -D warnings`
+- [x] Rustfmt passes: `cargo fmt --all -- --check`
+- [x] Documentation builds: `cargo doc --package ractor_shell --no-deps`
+- [x] Examples run successfully (demo, dynamic_actor, monitoring_demo)
+- [x] No ractor_experiments references remain
 - [ ] Git history is clean (consider squashing commits)
 
 ### PR Description Template
