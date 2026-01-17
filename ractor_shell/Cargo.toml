@@ -15,7 +15,7 @@ path = "src/main.rs"
 
 [dependencies]
 # Workspace members - use local paths
-ractor = { path = "../ractor", features = ["cluster", "blanket_serde"] }
+ractor = { path = "../ractor", features = ["cluster", "blanket_serde", "shell-introspection"] }
 ractor_cluster = { path = "../ractor_cluster" }
 
 # External dependencies

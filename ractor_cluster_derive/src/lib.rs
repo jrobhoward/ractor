@@ -67,7 +67,29 @@ pub fn ractor_message_derive_macro(input: TokenStream) -> TokenStream {
 /// 4. Lastly, for RPCs, they should additionally be decorated with `#[rpc]` on each variant's definition. This helps the macro identify that it
 ///    is an RPC and will need port handler
 /// 5. For backwards compatibility, you can add new variants as long as you don't rename variants until all nodes in the cluster are upgraded.
-#[proc_macro_derive(RactorClusterMessage, attributes(rpc))]
+///
+/// ## Shell Introspection
+///
+/// Optionally, you can add the `#[ractor_shell]` attribute to enable shell introspection.
+/// This generates an implementation of `ractor::SchemaProvider` (when the `shell-introspection`
+/// feature is enabled) that allows the ractor_shell to:
+///
+/// - Query the message schema to show available variants and their fields
+/// - Convert JSON input to properly-typed messages
+/// - Send messages through the normal ractor_cluster path (enabling tracing)
+///
+/// Example:
+/// ```ignore
+/// #[derive(RactorClusterMessage)]
+/// #[ractor_shell]
+/// pub enum MyMessage {
+///     Ping,
+///     SetValue(i32),
+///     #[rpc]
+///     GetValue(RpcReplyPort<i32>),
+/// }
+/// ```
+#[proc_macro_derive(RactorClusterMessage, attributes(rpc, ractor_shell))]
 pub fn ractor_cluster_message_derive_macro(input: TokenStream) -> TokenStream {
     // Construct a representation of Rust code as a syntax tree
     // that we can manipulate
@@ -86,6 +108,12 @@ pub fn ractor_cluster_message_derive_macro(input: TokenStream) -> TokenStream {
 fn impl_message_macro(ast: &syn::DeriveInput) -> syn::Result<TokenStream> {
     let name = &ast.ident;
     let (impl_generics, ty_generics, where_clause) = ast.generics.split_for_impl();
+
+    // Check if the #[ractor_shell] attribute is present
+    let has_shell_attr = ast
+        .attrs
+        .iter()
+        .any(|attr| attr.path().is_ident("ractor_shell"));
 
     // we don't support the derive macro on structs or unions
     if let syn::Data::Enum(enum_data) = &ast.data {
@@ -123,7 +151,8 @@ fn impl_message_macro(ast: &syn::DeriveInput) -> syn::Result<TokenStream> {
             })
             .collect::<Result<Vec<_>, _>>()?;
 
-        Ok((quote! {
+        // Generate the Message impl
+        let message_impl = quote! {
             impl #impl_generics ractor::Message for #name #ty_generics #where_clause {
                 fn serializable() -> bool {
                     // Network serializable message
@@ -165,6 +194,20 @@ fn impl_message_macro(ast: &syn::DeriveInput) -> syn::Result<TokenStream> {
                     }
                 }
             }
+        };
+
+        // Optionally generate SchemaProvider impl if #[ractor_shell] is present
+        let schema_impl = if has_shell_attr {
+            let schema_provider_impl =
+                impl_schema_provider(name, &impl_generics, &ty_generics, where_clause, enum_data)?;
+            quote! { #schema_provider_impl }
+        } else {
+            quote! {}
+        };
+
+        Ok((quote! {
+            #message_impl
+            #schema_impl
         })
         .into())
     } else {
@@ -525,5 +568,312 @@ fn get_generic_reply_port_type(
              \n\
              The generic argument specifies what type will be returned by the RPC call.",
         ))
+    }
+}
+
+// ======================== SchemaProvider Generation ======================== //
+
+fn impl_schema_provider(
+    name: &Ident,
+    impl_generics: &syn::ImplGenerics,
+    ty_generics: &syn::TypeGenerics,
+    where_clause: Option<&syn::WhereClause>,
+    enum_data: &syn::DataEnum,
+) -> syn::Result<impl ToTokens> {
+    // Build the schema JSON string
+    let schema_json = build_schema_json(enum_data)?;
+
+    // Build from_json match arms for cast (non-RPC) variants
+    let from_json_arms = enum_data
+        .variants
+        .iter()
+        .map(|variant| impl_variant_from_json(name, variant))
+        .collect::<Result<Vec<_>, _>>()?;
+
+    // Build to_json match arms for all variants
+    let to_json_arms = enum_data
+        .variants
+        .iter()
+        .map(|variant| impl_variant_to_json(name, variant))
+        .collect::<Result<Vec<_>, _>>()?;
+
+    // Note: We don't wrap this in #[cfg(feature = "shell-introspection")] because
+    // that feature is defined in the `ractor` crate, not in the crate using this derive.
+    // If the feature isn't enabled, ractor::SchemaProvider won't exist and compilation
+    // will fail with a clear error message.
+    Ok(quote! {
+        impl #impl_generics ractor::SchemaProvider for #name #ty_generics #where_clause {
+            fn message_schema() -> &'static str {
+                #schema_json
+            }
+
+            fn from_json(variant: &str, args: serde_json::Value) -> Result<Self, ractor::JsonDeserializeError> {
+                match variant {
+                    #( #from_json_arms ),*
+                    _ => Err(ractor::JsonDeserializeError::unknown_variant(variant))
+                }
+            }
+
+            fn to_json(&self) -> serde_json::Value {
+                match self {
+                    #( #to_json_arms ),*
+                }
+            }
+        }
+    })
+}
+
+fn build_schema_json(enum_data: &syn::DataEnum) -> syn::Result<String> {
+    let mut variants_json = Vec::new();
+
+    for variant in &enum_data.variants {
+        let variant_name = variant.ident.to_string();
+        let is_rpc = variant.attrs.iter().any(|attr| attr.path().is_ident("rpc"));
+
+        let fields_json = match &variant.fields {
+            Fields::Unit => "{}".to_string(),
+            Fields::Unnamed(unnamed) => {
+                let mut field_entries = Vec::new();
+                let field_count = if is_rpc {
+                    // Exclude the last field (RpcReplyPort) for RPC variants
+                    unnamed.unnamed.len().saturating_sub(1)
+                } else {
+                    unnamed.unnamed.len()
+                };
+
+                for (i, field) in unnamed.unnamed.iter().take(field_count).enumerate() {
+                    let type_str = type_to_string(&field.ty);
+                    field_entries.push(format!("\"{}\":\"{}\"", i, type_str));
+                }
+                format!("{{{}}}", field_entries.join(","))
+            }
+            Fields::Named(named) => {
+                let mut field_entries = Vec::new();
+                for field in &named.named {
+                    if let Some(ident) = &field.ident {
+                        let type_str = type_to_string(&field.ty);
+                        field_entries.push(format!("\"{}\":\"{}\"", ident, type_str));
+                    }
+                }
+                format!("{{{}}}", field_entries.join(","))
+            }
+        };
+
+        // Get reply type for RPC variants
+        let reply_type_json = if is_rpc {
+            if let Fields::Unnamed(unnamed) = &variant.fields {
+                if let Some(last_field) = unnamed.unnamed.last() {
+                    if let syn::Type::Path(path) = &last_field.ty {
+                        if let Ok(generic_args) = get_generic_reply_port_type(path) {
+                            let reply_type_str = generic_args.args.to_token_stream().to_string();
+                            format!(",\"reply_type\":\"{}\"", reply_type_str.replace(' ', ""))
+                        } else {
+                            String::new()
+                        }
+                    } else {
+                        String::new()
+                    }
+                } else {
+                    String::new()
+                }
+            } else {
+                String::new()
+            }
+        } else {
+            String::new()
+        };
+
+        variants_json.push(format!(
+            "\"{}\":{{\"fields\":{},\"rpc\":{}{}}}",
+            variant_name, fields_json, is_rpc, reply_type_json
+        ));
+    }
+
+    Ok(format!("{{\"variants\":{{{}}}}}", variants_json.join(",")))
+}
+
+fn type_to_string(ty: &syn::Type) -> String {
+    // Convert a type to a simple string representation
+    ty.to_token_stream()
+        .to_string()
+        .replace(' ', "")
+        .replace("ractor::", "")
+        .replace("crate::", "")
+}
+
+fn impl_variant_from_json(_enum_name: &Ident, variant: &Variant) -> syn::Result<impl ToTokens> {
+    let variant_name = &variant.ident;
+    let variant_name_str = variant_name.to_string();
+    let is_rpc = variant.attrs.iter().any(|attr| attr.path().is_ident("rpc"));
+
+    // RPC variants cannot be deserialized from JSON directly (need RpcReplyPort)
+    if is_rpc {
+        return Ok(quote! {
+            #variant_name_str => {
+                Err(ractor::JsonDeserializeError::new(
+                    format!("'{}' is an RPC variant and cannot be deserialized from JSON directly. Use the schema-aware RPC call mechanism.", #variant_name_str)
+                ))
+            }
+        });
+    }
+
+    match &variant.fields {
+        Fields::Unit => Ok(quote! {
+            #variant_name_str => Ok(Self::#variant_name)
+        }),
+        Fields::Unnamed(unnamed) => {
+            let field_extractions: Vec<_> = unnamed
+                .unnamed
+                .iter()
+                .enumerate()
+                .map(|(i, field)| {
+                    let field_name = format_ident!("field{}", i);
+                    let field_idx = i.to_string();
+                    let field_type = &field.ty;
+                    generate_json_field_extraction(&field_name, &field_idx, field_type)
+                })
+                .collect();
+
+            let field_names: Vec<_> = (0..unnamed.unnamed.len())
+                .map(|i| format_ident!("field{}", i))
+                .collect();
+
+            Ok(quote! {
+                #variant_name_str => {
+                    #( #field_extractions )*
+                    Ok(Self::#variant_name(#( #field_names ),*))
+                }
+            })
+        }
+        Fields::Named(named) => {
+            let field_extractions: Vec<_> = named
+                .named
+                .iter()
+                .filter_map(|field| {
+                    field.ident.as_ref().map(|ident| {
+                        let field_name_str = ident.to_string();
+                        let field_type = &field.ty;
+                        generate_json_field_extraction(ident, &field_name_str, field_type)
+                    })
+                })
+                .collect();
+
+            let field_names: Vec<_> = named
+                .named
+                .iter()
+                .filter_map(|f| f.ident.as_ref())
+                .collect();
+
+            Ok(quote! {
+                #variant_name_str => {
+                    #( #field_extractions )*
+                    Ok(Self::#variant_name { #( #field_names ),* })
+                }
+            })
+        }
+    }
+}
+
+fn generate_json_field_extraction(
+    field_name: &Ident,
+    field_key: &str,
+    field_type: &syn::Type,
+) -> impl ToTokens {
+    // Generate code to extract a field from JSON
+    // We use serde_json's from_value for type conversion
+    quote! {
+        let #field_name: #field_type = {
+            let value = args.get(#field_key)
+                .ok_or_else(|| ractor::JsonDeserializeError::missing_field(#field_key))?;
+            serde_json::from_value(value.clone())
+                .map_err(|e| ractor::JsonDeserializeError::new(
+                    format!("field '{}': {}", #field_key, e)
+                ))?
+        };
+    }
+}
+
+fn impl_variant_to_json(_enum_name: &Ident, variant: &Variant) -> syn::Result<impl ToTokens> {
+    let variant_name = &variant.ident;
+    let variant_name_str = variant_name.to_string();
+    let is_rpc = variant.attrs.iter().any(|attr| attr.path().is_ident("rpc"));
+
+    match &variant.fields {
+        Fields::Unit => Ok(quote! {
+            Self::#variant_name => {
+                serde_json::json!({
+                    "variant": #variant_name_str
+                })
+            }
+        }),
+        Fields::Unnamed(unnamed) => {
+            // For RPC variants, exclude the last field (RpcReplyPort)
+            let field_count = if is_rpc {
+                unnamed.unnamed.len().saturating_sub(1)
+            } else {
+                unnamed.unnamed.len()
+            };
+
+            let field_names: Vec<_> = (0..field_count)
+                .map(|i| format_ident!("field{}", i))
+                .collect();
+
+            let field_patterns: Vec<_> = if is_rpc {
+                // Include all fields in pattern but only use non-port ones
+                let all_names: Vec<_> = (0..unnamed.unnamed.len())
+                    .map(|i| {
+                        if i < field_count {
+                            format_ident!("field{}", i)
+                        } else {
+                            format_ident!("_reply")
+                        }
+                    })
+                    .collect();
+                all_names
+            } else {
+                field_names.clone()
+            };
+
+            let json_fields: Vec<_> = (0..field_count)
+                .map(|i| {
+                    let field_name = format_ident!("field{}", i);
+                    let field_key = i.to_string();
+                    quote! { #field_key: #field_name }
+                })
+                .collect();
+
+            Ok(quote! {
+                Self::#variant_name(#( #field_patterns ),*) => {
+                    serde_json::json!({
+                        "variant": #variant_name_str,
+                        #( #json_fields ),*
+                    })
+                }
+            })
+        }
+        Fields::Named(named) => {
+            let field_names: Vec<_> = named
+                .named
+                .iter()
+                .filter_map(|f| f.ident.as_ref())
+                .collect();
+
+            let json_fields: Vec<_> = field_names
+                .iter()
+                .map(|name| {
+                    let name_str = name.to_string();
+                    quote! { #name_str: #name }
+                })
+                .collect();
+
+            Ok(quote! {
+                Self::#variant_name { #( #field_names ),* } => {
+                    serde_json::json!({
+                        "variant": #variant_name_str,
+                        #( #json_fields ),*
+                    })
+                }
+            })
+        }
     }
 }

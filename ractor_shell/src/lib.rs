@@ -69,6 +69,7 @@ pub mod messages;
 pub mod monitor;
 pub mod protocol;
 pub mod raft;
+pub mod schema_registry;
 pub mod table;
 pub mod tracing;
 pub mod tui;
@@ -217,6 +218,7 @@ impl ShellState {
             ShellCommand::TraceToFile { path, pattern } => {
                 self.cmd_trace_to_file(path, pattern).await
             }
+            ShellCommand::Schema { actor } => self.cmd_schema(actor).await,
         }
     }
 
@@ -934,6 +936,176 @@ impl ShellState {
         }
     }
 
+    /// Show message schema for an actor, or list all schema-enabled actors.
+    async fn cmd_schema(&self, actor: Option<String>) -> ShellResult<()> {
+        match actor {
+            Some(actor_name) => {
+                // Show schema for a specific actor
+                if let Some(node_name) = &self.current_node {
+                    // Remote query
+                    if let Some(introspection_ref) = self.connected_nodes.get(node_name) {
+                        let result = introspection_ref
+                            .call(
+                                |reply| {
+                                    ShellProtocolMessage::GetMessageSchema(
+                                        actor_name.clone(),
+                                        reply,
+                                    )
+                                },
+                                Some(DEFAULT_RPC_TIMEOUT),
+                            )
+                            .await
+                            .map_err(ShellError::messaging)?;
+
+                        match result {
+                            CallResult::Success(Some(schema_json)) => {
+                                self.display_schema(&actor_name, &schema_json);
+                                Ok(())
+                            }
+                            CallResult::Success(None) => {
+                                println!(
+                                    "{} Actor '{}' does not have a registered schema.",
+                                    "ℹ".cyan(),
+                                    actor_name
+                                );
+                                println!(
+                                    "{}",
+                                    "  Hint: The actor may use DynamicMessage or not support schema introspection."
+                                        .bright_black()
+                                );
+                                Ok(())
+                            }
+                            CallResult::Timeout => Err(ShellError::rpc_timeout()),
+                            CallResult::SenderError => Err(ShellError::RpcSenderError),
+                        }
+                    } else {
+                        Err(ShellError::NodeNotConnected(node_name.clone()))
+                    }
+                } else {
+                    // Local query
+                    if let Some(schema_json) = schema_registry::get_schema(&actor_name) {
+                        self.display_schema(&actor_name, &schema_json);
+                    } else {
+                        println!(
+                            "{} Actor '{}' does not have a registered schema.",
+                            "ℹ".cyan(),
+                            actor_name
+                        );
+                        println!(
+                            "{}",
+                            "  Hint: The actor may use DynamicMessage or not have registered a schema."
+                                .bright_black()
+                        );
+                    }
+                    Ok(())
+                }
+            }
+            None => {
+                // List all schema-enabled actors
+                if let Some(node_name) = &self.current_node {
+                    // Remote query
+                    if let Some(introspection_ref) = self.connected_nodes.get(node_name) {
+                        let result = introspection_ref
+                            .call(
+                                |reply| ShellProtocolMessage::ListSchemaActors(reply),
+                                Some(DEFAULT_RPC_TIMEOUT),
+                            )
+                            .await
+                            .map_err(ShellError::messaging)?;
+
+                        match result {
+                            CallResult::Success(schema_actors) => {
+                                if schema_actors.is_empty() {
+                                    println!(
+                                        "{}",
+                                        "No schema-enabled actors on this node.".bright_black()
+                                    );
+                                } else {
+                                    println!(
+                                        "{} on {}:",
+                                        "Schema-enabled actors".bold(),
+                                        node_name.cyan()
+                                    );
+                                    for actor in schema_actors {
+                                        println!("  {}", actor.name.green());
+                                    }
+                                    println!();
+                                    println!(
+                                        "{}",
+                                        "Use 'schema <actor>' to see the message schema."
+                                            .bright_black()
+                                    );
+                                }
+                                Ok(())
+                            }
+                            CallResult::Timeout => Err(ShellError::rpc_timeout()),
+                            CallResult::SenderError => Err(ShellError::RpcSenderError),
+                        }
+                    } else {
+                        Err(ShellError::NodeNotConnected(node_name.clone()))
+                    }
+                } else {
+                    // Local query
+                    let schemas = schema_registry::list_schemas();
+                    if schemas.is_empty() {
+                        println!("{}", "No schema-enabled actors registered.".bright_black());
+                        println!(
+                            "{}",
+                            "  Hint: Actors need to call schema_registry::register() in pre_start."
+                                .bright_black()
+                        );
+                    } else {
+                        println!("{}", "Schema-enabled actors:".bold());
+                        for (name, _) in &schemas {
+                            println!("  {}", name.green());
+                        }
+                        println!();
+                        println!(
+                            "{}",
+                            "Use 'schema <actor>' to see the message schema.".bright_black()
+                        );
+                    }
+                    Ok(())
+                }
+            }
+        }
+    }
+
+    /// Display a formatted schema for an actor.
+    fn display_schema(&self, actor_name: &str, schema_json: &str) {
+        println!(
+            "{} {}",
+            "Message schema for".bold(),
+            actor_name.green().bold()
+        );
+        println!();
+
+        // Parse and display the schema
+        if let Ok(schema) = serde_json::from_str::<serde_json::Value>(schema_json) {
+            let formatted = schema_registry::format_schema(&schema);
+            print!("{}", formatted);
+
+            // Show usage example
+            if let Some(variants) = schema.get("variants").and_then(|v| v.as_object()) {
+                // Find a simple example variant to show
+                if let Some((variant_name, _)) = variants.iter().next() {
+                    println!("{}", "Example usage:".bright_black());
+                    println!(
+                        "  {}",
+                        format!(
+                            "call {} {} {{\"field\": \"value\"}}",
+                            actor_name, variant_name
+                        )
+                        .cyan()
+                    );
+                }
+            }
+        } else {
+            // Fallback: just print the raw JSON
+            println!("{}", schema_json);
+        }
+    }
+
     async fn cmd_send(&self, actor: String, message: String) -> ShellResult<()> {
         println!("send {} <- {}", actor.green(), message.bright_black());
         println!();
@@ -1048,7 +1220,22 @@ impl ShellState {
         println!("call {} <- {}", actor.green(), message.bright_black());
         println!();
 
-        // Try to parse the message as JSON
+        // Check if the message looks like typed syntax: "VariantName {args}"
+        // This pattern: starts with uppercase letter, followed by optional whitespace and JSON object
+        let is_typed_syntax = Self::looks_like_typed_message(&message);
+
+        // For remote calls with typed syntax, always try typed RPC
+        // (the remote node might have the schema even if we don't locally)
+        if is_typed_syntax && self.current_node.is_some() {
+            return self.cmd_call_typed(&actor, &message).await;
+        }
+
+        // For local calls, check if actor has a registered schema
+        if schema_registry::has_schema(&actor) {
+            return self.cmd_call_typed(&actor, &message).await;
+        }
+
+        // Try to parse the message as JSON for DynamicMessage actors
         let json_value = match messages::parse_json_input(&message) {
             Ok(v) => v,
             Err(e) => {
@@ -1170,6 +1357,305 @@ impl ShellState {
             }
         } else {
             println!("{} Actor '{}' not found in registry", "✗".red(), actor);
+        }
+
+        Ok(())
+    }
+
+    /// Call a schema-enabled actor with typed RPC
+    async fn cmd_call_typed(&self, actor: &str, message: &str) -> ShellResult<()> {
+        // Parse the message as "VariantName {args}" or "VariantName {}"
+        let (variant, args) = Self::parse_typed_message(message)?;
+
+        // Check if we're in remote mode
+        if let Some(ref node_name) = self.current_node {
+            return self
+                .cmd_call_typed_remote(node_name.clone(), actor.to_string(), variant, args)
+                .await;
+        }
+
+        // Local call - handle known typed actors
+        let Some(cell) = registry::where_is(actor.to_string()) else {
+            println!("{} Actor '{}' not found in registry", "✗".red(), actor);
+            return Ok(());
+        };
+
+        // Special handling for raft_node (RaftMessage)
+        if actor == "raft_node" {
+            return self.cmd_call_raft(&cell, &variant, &args).await;
+        }
+
+        // For other schema actors, show helpful message
+        println!(
+            "{}",
+            "⚠ Typed RPC not yet implemented for this actor".yellow()
+        );
+        println!();
+        println!(
+            "  {} Actor '{}' has a schema but typed RPC requires explicit support.",
+            "•".bright_black(),
+            actor
+        );
+        println!(
+            "  {} Schema: {}",
+            "•".bright_black(),
+            schema_registry::get_schema(actor).unwrap_or_default()
+        );
+
+        Ok(())
+    }
+
+    /// Check if a message looks like typed syntax: "VariantName {}" or "VariantName {args}"
+    /// Returns true if message starts with uppercase letter and contains braces
+    fn looks_like_typed_message(message: &str) -> bool {
+        let message = message.trim();
+        // Must start with uppercase letter (Rust enum variant convention)
+        let starts_with_upper = message
+            .chars()
+            .next()
+            .map(|c| c.is_uppercase())
+            .unwrap_or(false);
+        // Must contain '{' somewhere
+        let has_brace = message.contains('{');
+        starts_with_upper && has_brace
+    }
+
+    /// Parse a typed message in format "VariantName {args}" or "VariantName {}"
+    fn parse_typed_message(message: &str) -> ShellResult<(String, serde_json::Value)> {
+        let message = message.trim();
+
+        // Find the variant name (everything before the first '{' or whitespace)
+        let variant_end = message
+            .find(|c: char| c == '{' || c.is_whitespace())
+            .unwrap_or(message.len());
+
+        let variant = message[..variant_end].trim().to_string();
+
+        if variant.is_empty() {
+            return Err(ShellError::ParseError(
+                "Missing variant name. Use format: VariantName {}".to_string(),
+            ));
+        }
+
+        // Parse the args (everything from '{' to end, or default to {})
+        let args_str = if let Some(brace_pos) = message.find('{') {
+            message[brace_pos..].trim()
+        } else {
+            "{}"
+        };
+
+        let args: serde_json::Value = serde_json::from_str(args_str).map_err(|e| {
+            ShellError::ParseError(format!(
+                "Invalid JSON args: {}. Use format: VariantName {{}}",
+                e
+            ))
+        })?;
+
+        Ok((variant, args))
+    }
+
+    /// Call a raft_node actor with typed RaftMessage RPC
+    async fn cmd_call_raft(
+        &self,
+        cell: &ractor::ActorCell,
+        variant: &str,
+        _args: &serde_json::Value,
+    ) -> ShellResult<()> {
+        use raft::RaftMessage;
+
+        let raft_ref: ActorRef<RaftMessage> = ActorRef::from(cell.clone());
+
+        match variant {
+            "GetStatus" => {
+                let result = raft_ref
+                    .call(RaftMessage::GetStatus, Some(DEFAULT_RPC_TIMEOUT))
+                    .await
+                    .map_err(ShellError::messaging)?;
+
+                match result {
+                    CallResult::Success(status) => {
+                        println!("{} RPC call successful", "✓".green().bold());
+                        println!();
+                        println!("{}", "Response:".bold());
+                        let json = serde_json::to_value(&status).unwrap_or_default();
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&json)
+                                .unwrap_or_default()
+                                .green()
+                        );
+                    }
+                    CallResult::Timeout => {
+                        println!("{} RPC call timed out", "✗".red().bold());
+                    }
+                    CallResult::SenderError => {
+                        println!("{} RPC sender error", "✗".red().bold());
+                    }
+                }
+            }
+            "IsLeader" => {
+                let result = raft_ref
+                    .call(RaftMessage::IsLeader, Some(DEFAULT_RPC_TIMEOUT))
+                    .await
+                    .map_err(ShellError::messaging)?;
+
+                match result {
+                    CallResult::Success(is_leader) => {
+                        println!("{} RPC call successful", "✓".green().bold());
+                        println!();
+                        println!("{}", "Response:".bold());
+                        println!("{}", is_leader.to_string().green());
+                    }
+                    CallResult::Timeout => {
+                        println!("{} RPC call timed out", "✗".red().bold());
+                    }
+                    CallResult::SenderError => {
+                        println!("{} RPC sender error", "✗".red().bold());
+                    }
+                }
+            }
+            "GetLeader" => {
+                let result = raft_ref
+                    .call(RaftMessage::GetLeader, Some(DEFAULT_RPC_TIMEOUT))
+                    .await
+                    .map_err(ShellError::messaging)?;
+
+                match result {
+                    CallResult::Success(leader) => {
+                        println!("{} RPC call successful", "✓".green().bold());
+                        println!();
+                        println!("{}", "Response:".bold());
+                        let display = leader.unwrap_or_else(|| "(none)".to_string());
+                        println!("{}", display.green());
+                    }
+                    CallResult::Timeout => {
+                        println!("{} RPC call timed out", "✗".red().bold());
+                    }
+                    CallResult::SenderError => {
+                        println!("{} RPC sender error", "✗".red().bold());
+                    }
+                }
+            }
+            "GetPeers" => {
+                let result = raft_ref
+                    .call(RaftMessage::GetPeers, Some(DEFAULT_RPC_TIMEOUT))
+                    .await
+                    .map_err(ShellError::messaging)?;
+
+                match result {
+                    CallResult::Success(peers) => {
+                        println!("{} RPC call successful", "✓".green().bold());
+                        println!();
+                        println!("{}", "Response:".bold());
+                        let json = serde_json::to_value(&peers).unwrap_or_default();
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&json)
+                                .unwrap_or_default()
+                                .green()
+                        );
+                    }
+                    CallResult::Timeout => {
+                        println!("{} RPC call timed out", "✗".red().bold());
+                    }
+                    CallResult::SenderError => {
+                        println!("{} RPC sender error", "✗".red().bold());
+                    }
+                }
+            }
+            _ => {
+                println!("{} Unknown RPC variant: {}", "✗".red().bold(), variant);
+                println!();
+                println!("{}", "Available RPC variants:".bold());
+                println!("  {} GetStatus {{}}", "•".bright_black());
+                println!("  {} IsLeader {{}}", "•".bright_black());
+                println!("  {} GetLeader {{}}", "•".bright_black());
+                println!("  {} GetPeers {{}}", "•".bright_black());
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Call a typed RPC on a remote node
+    async fn cmd_call_typed_remote(
+        &self,
+        node_name: String,
+        actor: String,
+        variant: String,
+        args: serde_json::Value,
+    ) -> ShellResult<()> {
+        let introspection_actor = self
+            .connected_nodes
+            .get(&node_name)
+            .ok_or_else(|| ShellError::NodeNotConnected(node_name.clone()))?;
+
+        // Use CallTypedRpc protocol message
+        let result = introspection_actor
+            .call(
+                |reply| {
+                    ShellProtocolMessage::CallTypedRpc(
+                        actor.clone(),
+                        variant.clone(),
+                        args.clone(),
+                        reply,
+                    )
+                },
+                Some(DEFAULT_RPC_TIMEOUT),
+            )
+            .await
+            .map_err(ShellError::messaging)?;
+
+        match result {
+            CallResult::Success(protocol::TypedRpcResult::Success(value)) => {
+                println!(
+                    "{} Response from {} on {}:",
+                    "✓".green().bold(),
+                    actor.green(),
+                    node_name.yellow()
+                );
+                println!();
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&value).unwrap_or_else(|_| format!("{:?}", value))
+                );
+            }
+            CallResult::Success(protocol::TypedRpcResult::ActorNotFound) => {
+                return Err(ShellError::RemoteActorNotFound {
+                    actor,
+                    node: node_name,
+                });
+            }
+            CallResult::Success(protocol::TypedRpcResult::NotSchemaEnabled) => {
+                println!(
+                    "{} {} is not schema-enabled on {}",
+                    "!".yellow().bold(),
+                    actor.yellow(),
+                    node_name.yellow()
+                );
+            }
+            CallResult::Success(protocol::TypedRpcResult::UnknownVariant(v)) => {
+                println!(
+                    "{} Unknown RPC variant '{}' for {}",
+                    "✗".red().bold(),
+                    v.red(),
+                    actor.yellow()
+                );
+            }
+            CallResult::Success(protocol::TypedRpcResult::CallFailed(err)) => {
+                println!(
+                    "{} Call to {} failed: {}",
+                    "✗".red().bold(),
+                    actor.yellow(),
+                    err.red()
+                );
+            }
+            CallResult::Timeout => {
+                return Err(ShellError::rpc_timeout());
+            }
+            CallResult::SenderError => {
+                return Err(ShellError::RpcSenderError);
+            }
         }
 
         Ok(())
@@ -1552,6 +2038,10 @@ impl ShellState {
                     println!("  {} Topology discovery failed (non-fatal)", "⚠".yellow());
                 }
             }
+
+            // Auto-switch to the connected node
+            self.current_node = Some(host.clone());
+            println!("{} Now using {}", "✓".green().bold(), host.yellow());
         }
 
         Ok(())
@@ -2111,6 +2601,8 @@ pub enum ShellCommand {
         path: String,
         pattern: Option<String>,
     },
+    /// Show message schema for an actor. Alias: `sc`. Usage: `schema <actor>` or `schema` to list all
+    Schema { actor: Option<String> },
 }
 
 impl ShellCommand {
@@ -2128,6 +2620,7 @@ impl ShellCommand {
             "t" => "top",
             "tr" => "trace",
             "tf" => "trace-to-file",
+            "sc" => "schema",
             _ => cmd,
         }
     }
@@ -2336,6 +2829,9 @@ impl ShellCommand {
                     pattern: parts.get(2).map(|s| s.to_string()),
                 })
             }
+            "schema" => Ok(ShellCommand::Schema {
+                actor: parts.get(1).map(|s| s.to_string()),
+            }),
             _ => Err(ShellError::UnknownCommand(parts[0].to_string())),
         }
     }

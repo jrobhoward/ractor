@@ -19,3 +19,6 @@ proc-macro = true
 [dependencies]
 quote = "1"
 syn = { version = "2", features = ["extra-traits"] }
+
+# Note: serde_json is only used in generated code when shell-introspection is enabled
+# The derive macro itself doesn't depend on it at runtime

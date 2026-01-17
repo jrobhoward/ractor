@@ -360,8 +360,55 @@ impl Actor for AdminActor {
 
 This gives you type safety where it matters and flexibility where you need it.
 
+## Alternative: Schema-Enabled Typed Messages
+
+For actors that need efficient binary serialization over the cluster network (like Raft), `DynamicMessage` adds overhead. Instead, you can use typed messages with schema introspection:
+
+```rust
+use ractor_cluster_derive::RactorClusterMessage;
+
+#[derive(RactorClusterMessage, Debug)]
+#[ractor_shell]  // Generates SchemaProvider for shell introspection
+pub enum MyMessage {
+    // Internal messages (binary over cluster)
+    DoWork(u64, String),
+
+    // Shell-queryable RPC variants
+    #[rpc] GetStatus(RpcReplyPort<MyStatus>),
+    #[rpc] GetValue(RpcReplyPort<i32>),
+}
+
+impl Actor for MyActor {
+    type Msg = MyMessage;
+
+    async fn pre_start(&self, myself: ActorRef<Self::Msg>, _args: ()) -> Result<Self::State, ActorProcessingErr> {
+        // Register schema for shell introspection
+        if let Some(name) = myself.get_name() {
+            ractor_shell::schema_registry::register::<MyMessage>(&name);
+        }
+        Ok(MyState::default())
+    }
+}
+```
+
+From the shell, use typed syntax:
+```
+ractor@local > call my_actor GetStatus {}
+ractor@local > call my_actor GetValue {}
+```
+
+**When to use typed messages:**
+- Cluster actors that need binary serialization
+- Performance-critical message paths
+- Actors with well-defined RPC interfaces
+
+**When to use DynamicMessage:**
+- Prototyping and experimentation
+- Actors that need maximum flexibility
+- Admin interfaces with evolving commands
+
 ## See Also
 
-- `examples/dynamic_actor.rs` - Complete working example
-- `TESTING_PHASE4.md` - Testing guide
-- `src/dynamic.rs` - Implementation details
+- `examples/dynamic_actor.rs` - Complete DynamicMessage example
+- `src/raft.rs` - Schema-enabled typed message example (RaftMessage)
+- `src/schema_registry.rs` - Schema registration implementation

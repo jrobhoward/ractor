@@ -28,12 +28,12 @@
 //! ```bash
 //! cargo run --example demo -p ractor_shell
 //!
-//! # Connect and query
+//! # Connect and query using typed RPC
 //! ractor@local > connect 127.0.0.1:9001
-//! ractor@local > call raft_node {"command": "is_leader"}
-//! ractor@local > call raft_node {"command": "get_leader"}
-//! ractor@local > call raft_node {"command": "status"}
-//! ractor@local > call raft_node {"command": "peers"}
+//! ractor@127.0.0.1:9001 > call raft_node IsLeader {}
+//! ractor@127.0.0.1:9001 > call raft_node GetLeader {}
+//! ractor@127.0.0.1:9001 > call raft_node GetStatus {}
+//! ractor@127.0.0.1:9001 > call raft_node GetPeers {}
 //! ```
 //!
 //! ## Architecture
@@ -250,16 +250,10 @@ fn print_instructions(args: &Args) {
     println!("  Then query this node:");
     println!();
     println!("    {}", format!("connect 127.0.0.1:{}", args.port).green());
-    println!(
-        "    {}",
-        r#"call raft_node {"command": "is_leader"}"#.green()
-    );
-    println!(
-        "    {}",
-        r#"call raft_node {"command": "get_leader"}"#.green()
-    );
-    println!("    {}", r#"call raft_node {"command": "status"}"#.green());
-    println!("    {}", r#"call raft_node {"command": "peers"}"#.green());
+    println!("    {}", "call raft_node IsLeader {}".green());
+    println!("    {}", "call raft_node GetLeader {}".green());
+    println!("    {}", "call raft_node GetStatus {}".green());
+    println!("    {}", "call raft_node GetPeers {}".green());
     println!();
 
     println!("{}", "─".repeat(60).bright_black());
@@ -268,20 +262,14 @@ fn print_instructions(args: &Args) {
     println!();
     println!(
         "  {} - Check if this node is leader",
-        r#"{"command": "is_leader"}"#.yellow()
+        "IsLeader {}".yellow()
     );
-    println!(
-        "  {} - Get current leader name",
-        r#"{"command": "get_leader"}"#.yellow()
-    );
+    println!("  {} - Get current leader name", "GetLeader {}".yellow());
     println!(
         "  {} - Full status (role, term, peers)",
-        r#"{"command": "status"}"#.yellow()
+        "GetStatus {}".yellow()
     );
-    println!(
-        "  {} - List connected peers",
-        r#"{"command": "peers"}"#.yellow()
-    );
+    println!("  {} - List connected peers", "GetPeers {}".yellow());
     println!();
 
     println!("{}", "─".repeat(60).bright_black());

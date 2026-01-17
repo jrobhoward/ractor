@@ -80,6 +80,10 @@ pub enum ShellError {
     #[error("JSON parse error: {0}. Example: {{\"command\": \"value\"}}")]
     JsonParseError(String),
 
+    /// General parse error.
+    #[error("Parse error: {0}")]
+    ParseError(String),
+
     /// Feature not yet implemented.
     #[error("{0}")]
     NotImplemented(&'static str),

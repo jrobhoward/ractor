@@ -28,6 +28,7 @@ output-port-v2 = []
 tokio_runtime = ["tokio/time", "tokio/rt", "tokio/macros", "tokio/tracing"]
 blanket_serde = ["serde", "pot", "cluster"]
 async-trait = ["dep:async-trait"]
+shell-introspection = ["serde_json"]
 
 default = ["tokio_runtime", "message_span_propogation"]
 
@@ -50,6 +51,9 @@ tracing = { version = "0.1", features = ["attributes"] }
 ## Blanket Serde
 serde = { version = "1", optional = true }
 pot = { version = "3.0", optional = true }
+
+## Shell Introspection
+serde_json = { version = "1", optional = true }
 
 
 [target.'cfg(all(target_arch = "wasm32",target_os = "unknown"))'.dependencies]

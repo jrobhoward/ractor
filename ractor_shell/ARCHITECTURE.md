@@ -209,6 +209,29 @@ Actor that tracks lifecycle events for monitored actors:
 - `ActorPanicked` - Actor panicked during message handling
 - `ActorKilled` - Actor received kill signal
 
+### Schema Registry
+
+A global registry that tracks schema-enabled actors for typed message introspection:
+
+```rust
+// Actors register their schema in pre_start
+if let Some(name) = myself.get_name() {
+    schema_registry::register::<RaftMessage>(&name);
+}
+
+// Shell checks if actor has schema
+if schema_registry::has_schema(&actor) {
+    // Use typed RPC instead of DynamicMessage
+    self.cmd_call_typed(&actor, &message).await
+}
+```
+
+**Features:**
+- Actors register schema JSON describing their message variants
+- Shell detects typed syntax (`VariantName {}`) and routes appropriately
+- Remote calls use `CallTypedRpc` protocol message
+- Enables direct peer-to-peer typed communication while remaining shell-queryable
+
 ## Command Flow
 
 ### Local Command Execution
@@ -349,6 +372,13 @@ pub enum ShellProtocolMessage {
 
     /// Get full cluster topology
     GetClusterTopology(RpcReplyPort<ClusterTopology>),
+
+    /// Schema introspection
+    GetMessageSchema(String, RpcReplyPort<Option<String>>),
+    ListSchemaActors(RpcReplyPort<Vec<SchemaActorInfo>>),
+
+    /// Typed RPC for schema-enabled actors
+    CallTypedRpc(String, String, Value, RpcReplyPort<TypedRpcResult>),
 }
 ```
 
@@ -377,6 +407,34 @@ pub enum ShellProtocolMessage {
 **Rationale:** Type safety is fundamental to Rust and ractor. Arbitrary JSON cannot be safely converted to typed messages without actor cooperation.
 
 **Trade-off:** Not all actors can receive shell messages. But this is the correct design for a type-safe system.
+
+### 3b. Schema-Enabled Typed Messages
+
+**Decision:** Actors can use typed messages with `#[derive(RactorClusterMessage)]` and `#[ractor_shell]` attributes for direct peer-to-peer communication while remaining shell-queryable.
+
+**Rationale:** For actors like Raft that need efficient binary serialization over the cluster network, using `DynamicMessage` adds unnecessary overhead. Schema-enabled typed messages provide:
+- Direct typed communication between peers (no JSON serialization)
+- Shell introspection via schema registry
+- Type-safe RPC variants with `RpcReplyPort<T>`
+
+**Implementation:**
+```rust
+#[derive(RactorClusterMessage, Debug)]
+#[ractor_shell]  // Generates SchemaProvider implementation
+pub enum RaftMessage {
+    // Peer protocol (binary over cluster)
+    RequestVote(u64, String),
+    Heartbeat(u64, String),
+
+    // Shell RPC variants
+    #[rpc] GetStatus(RpcReplyPort<RaftStatus>),
+    #[rpc] IsLeader(RpcReplyPort<bool>),
+}
+```
+
+**Shell syntax:** `call raft_node GetStatus {}` instead of JSON.
+
+**Trade-off:** Requires explicit support in IntrospectionActor for each typed actor (currently raft_node). Future work could automate this via the schema registry.
 
 ### 4. RPC-Based Remote Introspection
 
@@ -431,7 +489,7 @@ See [TESTING.md](TESTING.md) for complete testing conventions.
 
 ## Future Considerations
 
-### Introspection APIs (Phase 2)
+### Introspection APIs
 
 Future ractor versions may add:
 - `get_all_actors()` - Complete actor enumeration
@@ -442,6 +500,13 @@ These would enable:
 - Full actor visibility
 - True supervision tree display
 - Real-time event streams
+
+### Schema Registry Enhancements
+
+Current typed RPC support is implemented for `raft_node` specifically. Future enhancements could:
+- Auto-generate dispatch code from schema metadata
+- Support arbitrary schema-enabled actors without explicit handler code
+- Add schema validation for message arguments
 
 ### Performance Optimizations
 

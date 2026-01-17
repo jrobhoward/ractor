@@ -106,189 +106,201 @@ fn vote_response___serialize___produces_valid_json() {
 }
 
 #[test]
-fn raft_protocol_serialize___election_timeout___produces_valid_json() {
-    let msg = RaftProtocol::ElectionTimeout { generation: 5 };
-    let json = serde_json::to_string(&msg).unwrap();
-    assert!(json.contains("\"raft_type\":\"ElectionTimeout\""));
-    assert!(json.contains("\"generation\":5"));
-}
-
-#[test]
-fn raft_protocol_serialize___request_vote___produces_valid_json() {
-    let msg = RaftProtocol::RequestVote {
-        term: 3,
-        candidate_name: "node_a".to_string(),
+fn raft_state___get_status___returns_correct_values() {
+    let config = RaftConfig {
+        node_name: "test_node".to_string(),
+        ..Default::default()
     };
-    let json = serde_json::to_string(&msg).unwrap();
-    assert!(json.contains("\"raft_type\":\"RequestVote\""));
-    assert!(json.contains("\"term\":3"));
-    assert!(json.contains("\"candidate_name\":\"node_a\""));
+    let state = RaftState::new(config);
+
+    let status = state.get_status();
+
+    assert_eq!(status.node_name, "test_node");
+    assert_eq!(status.role, "Follower");
+    assert_eq!(status.term, 0);
+    assert!(status.leader.is_none());
+    assert_eq!(status.peers, 0);
+    assert!(status.voted_for.is_none());
 }
 
 #[test]
-fn raft_protocol_serialize___heartbeat___produces_valid_json() {
-    let msg = RaftProtocol::Heartbeat {
+fn raft_status___serialize___produces_valid_json() {
+    let status = RaftStatus {
+        node_name: "node1".to_string(),
+        role: "Leader".to_string(),
         term: 5,
-        leader_name: "node_b".to_string(),
+        leader: Some("node1".to_string()),
+        peers: 2,
+        voted_for: Some("node1".to_string()),
     };
-    let json = serde_json::to_string(&msg).unwrap();
-    assert!(json.contains("\"raft_type\":\"Heartbeat\""));
+
+    let json = serde_json::to_string(&status).unwrap();
+
+    assert!(json.contains("\"node_name\":\"node1\""));
+    assert!(json.contains("\"role\":\"Leader\""));
     assert!(json.contains("\"term\":5"));
-    assert!(json.contains("\"leader_name\":\"node_b\""));
+    assert!(json.contains("\"peers\":2"));
+}
+
+// ==================== RaftMessage SchemaProvider Tests ====================
+
+#[test]
+fn raft_message_schema___message_schema___returns_valid_json() {
+    use ractor::SchemaProvider;
+
+    let schema = RaftMessage::message_schema();
+    let parsed: serde_json::Value =
+        serde_json::from_str(schema).expect("Schema should be valid JSON");
+
+    // Verify all variants are present
+    let variants = parsed.get("variants").expect("Should have variants");
+    assert!(variants.get("ElectionTimeout").is_some());
+    assert!(variants.get("HeartbeatTimeout").is_some());
+    assert!(variants.get("DiscoverPeers").is_some());
+    assert!(variants.get("RequestVote").is_some());
+    assert!(variants.get("VoteResponse").is_some());
+    assert!(variants.get("Heartbeat").is_some());
+    assert!(variants.get("GetStatus").is_some());
+    assert!(variants.get("IsLeader").is_some());
+    assert!(variants.get("GetLeader").is_some());
+    assert!(variants.get("GetPeers").is_some());
 }
 
 #[test]
-fn raft_protocol_deserialize___roundtrip___preserves_values() {
-    let original = RaftProtocol::VoteResponse {
-        term: 7,
-        vote_granted: true,
-        voter_name: "node_c".to_string(),
-    };
+fn raft_message_schema___from_json___parses_request_vote() {
+    use ractor::SchemaProvider;
 
-    let json = serde_json::to_string(&original).unwrap();
-    let deserialized: RaftProtocol = serde_json::from_str(&json).unwrap();
+    // Tuple-style variant: RequestVote(term, candidate_name)
+    let args = serde_json::json!({
+        "0": 5,
+        "1": "node_a"
+    });
+    let msg = RaftMessage::from_json("RequestVote", args).expect("Should parse RequestVote");
 
-    match deserialized {
-        RaftProtocol::VoteResponse {
-            term,
-            vote_granted,
-            voter_name,
-        } => {
-            assert_eq!(term, 7);
+    match msg {
+        RaftMessage::RequestVote(term, candidate_name) => {
+            assert_eq!(term, 5);
+            assert_eq!(candidate_name, "node_a");
+        }
+        _ => panic!("Expected RequestVote variant"),
+    }
+}
+
+#[test]
+fn raft_message_schema___from_json___parses_heartbeat() {
+    use ractor::SchemaProvider;
+
+    // Tuple-style variant: Heartbeat(term, leader_name)
+    let args = serde_json::json!({
+        "0": 10,
+        "1": "leader_node"
+    });
+    let msg = RaftMessage::from_json("Heartbeat", args).expect("Should parse Heartbeat");
+
+    match msg {
+        RaftMessage::Heartbeat(term, leader_name) => {
+            assert_eq!(term, 10);
+            assert_eq!(leader_name, "leader_node");
+        }
+        _ => panic!("Expected Heartbeat variant"),
+    }
+}
+
+#[test]
+fn raft_message_schema___from_json___parses_vote_response() {
+    use ractor::SchemaProvider;
+
+    // Tuple-style variant: VoteResponse(term, vote_granted, voter_name)
+    let args = serde_json::json!({
+        "0": 3,
+        "1": true,
+        "2": "voter_node"
+    });
+    let msg = RaftMessage::from_json("VoteResponse", args).expect("Should parse VoteResponse");
+
+    match msg {
+        RaftMessage::VoteResponse(term, vote_granted, voter_name) => {
+            assert_eq!(term, 3);
             assert!(vote_granted);
-            assert_eq!(voter_name, "node_c");
+            assert_eq!(voter_name, "voter_node");
         }
-        _ => panic!("Expected VoteResponse"),
+        _ => panic!("Expected VoteResponse variant"),
     }
 }
 
 #[test]
-fn raft_node_handle_call_command___is_leader___returns_status() {
-    let config = RaftConfig {
-        node_name: "test_node".to_string(),
-        ..Default::default()
-    };
-    let state = RaftState::new(config);
-    let node = RaftNode;
+fn raft_message_schema___from_json___parses_election_timeout() {
+    use ractor::SchemaProvider;
 
-    let json = serde_json::json!({"command": "is_leader"});
-    let response = node.handle_call_command(&state, json);
+    let args = serde_json::json!({"0": 42});
+    let msg =
+        RaftMessage::from_json("ElectionTimeout", args).expect("Should parse ElectionTimeout");
 
-    match response {
-        CallResponse::Success(value) => {
-            assert_eq!(value["is_leader"], false);
-            assert_eq!(value["node_name"], "test_node");
-            assert_eq!(value["term"], 0);
+    match msg {
+        RaftMessage::ElectionTimeout(gen) => {
+            assert_eq!(gen, 42);
         }
-        CallResponse::Error(e) => panic!("Expected success, got error: {}", e),
+        _ => panic!("Expected ElectionTimeout variant"),
     }
 }
 
 #[test]
-fn raft_node_handle_call_command___get_leader___returns_none_initially() {
-    let config = RaftConfig {
-        node_name: "test_node".to_string(),
-        ..Default::default()
-    };
-    let state = RaftState::new(config);
-    let node = RaftNode;
+fn raft_message_schema___from_json___rpc_variant___returns_error() {
+    use ractor::SchemaProvider;
 
-    let json = serde_json::json!({"command": "get_leader"});
-    let response = node.handle_call_command(&state, json);
-
-    match response {
-        CallResponse::Success(value) => {
-            assert!(value["leader"].is_null());
-            assert_eq!(value["term"], 0);
-        }
-        CallResponse::Error(e) => panic!("Expected success, got error: {}", e),
-    }
+    // RPC variants can't be constructed via from_json (they need RpcReplyPort)
+    let args = serde_json::json!({});
+    let result = RaftMessage::from_json("GetStatus", args);
+    assert!(result.is_err(), "RPC variants should return error");
+    assert!(
+        result.unwrap_err().message.contains("RPC variant"),
+        "Error should mention RPC variant"
+    );
 }
 
 #[test]
-fn raft_node_handle_call_command___status___returns_full_status() {
-    let config = RaftConfig {
-        node_name: "test_node".to_string(),
-        ..Default::default()
-    };
-    let state = RaftState::new(config);
-    let node = RaftNode;
+fn raft_message_schema___from_json___unknown_variant___returns_error() {
+    use ractor::SchemaProvider;
 
-    let json = serde_json::json!({"command": "status"});
-    let response = node.handle_call_command(&state, json);
-
-    match response {
-        CallResponse::Success(value) => {
-            assert_eq!(value["node_name"], "test_node");
-            assert_eq!(value["role"], "Follower");
-            assert_eq!(value["term"], 0);
-            assert!(value["leader"].is_null());
-            assert_eq!(value["peers"], 0);
-        }
-        CallResponse::Error(e) => panic!("Expected success, got error: {}", e),
-    }
+    let args = serde_json::json!({});
+    let result = RaftMessage::from_json("UnknownVariant", args);
+    assert!(result.is_err());
+    assert!(result.unwrap_err().message.contains("unknown variant"));
 }
 
 #[test]
-fn raft_node_handle_call_command___peers___returns_empty_initially() {
-    let config = RaftConfig {
-        node_name: "test_node".to_string(),
-        ..Default::default()
-    };
-    let state = RaftState::new(config);
-    let node = RaftNode;
+fn raft_message_schema___to_json___serializes_request_vote() {
+    use ractor::SchemaProvider;
 
-    let json = serde_json::json!({"command": "peers"});
-    let response = node.handle_call_command(&state, json);
+    let msg = RaftMessage::RequestVote(7, "candidate_x".to_string());
+    let json = msg.to_json();
 
-    match response {
-        CallResponse::Success(value) => {
-            assert_eq!(value["count"], 0);
-            assert!(value["peers"].as_array().unwrap().is_empty());
-        }
-        CallResponse::Error(e) => panic!("Expected success, got error: {}", e),
-    }
+    assert_eq!(json.get("variant").unwrap(), "RequestVote");
+    assert_eq!(json.get("0").unwrap(), 7);
+    assert_eq!(json.get("1").unwrap(), "candidate_x");
 }
 
 #[test]
-fn raft_node_handle_call_command___unknown___returns_error() {
-    let config = RaftConfig {
-        node_name: "test_node".to_string(),
-        ..Default::default()
-    };
-    let state = RaftState::new(config);
-    let node = RaftNode;
+fn raft_message_schema___to_json___serializes_heartbeat() {
+    use ractor::SchemaProvider;
 
-    let json = serde_json::json!({"command": "invalid_command"});
-    let response = node.handle_call_command(&state, json);
+    let msg = RaftMessage::Heartbeat(10, "leader_node".to_string());
+    let json = msg.to_json();
 
-    match response {
-        CallResponse::Success(_) => panic!("Expected error for unknown command"),
-        CallResponse::Error(e) => {
-            assert!(e.contains("Unknown command"));
-            assert!(e.contains("invalid_command"));
-        }
-    }
+    assert_eq!(json.get("variant").unwrap(), "Heartbeat");
+    assert_eq!(json.get("0").unwrap(), 10);
+    assert_eq!(json.get("1").unwrap(), "leader_node");
 }
 
 #[test]
-fn raft_node_handle_call_command___no_command___defaults_to_status() {
-    let config = RaftConfig {
-        node_name: "test_node".to_string(),
-        ..Default::default()
-    };
-    let state = RaftState::new(config);
-    let node = RaftNode;
+fn raft_message_schema___to_json___serializes_vote_response() {
+    use ractor::SchemaProvider;
 
-    let json = serde_json::json!({});
-    let response = node.handle_call_command(&state, json);
+    let msg = RaftMessage::VoteResponse(5, true, "voter_a".to_string());
+    let json = msg.to_json();
 
-    match response {
-        CallResponse::Success(value) => {
-            // Default is "status" command
-            assert_eq!(value["node_name"], "test_node");
-            assert_eq!(value["role"], "Follower");
-        }
-        CallResponse::Error(e) => panic!("Expected success, got error: {}", e),
-    }
+    assert_eq!(json.get("variant").unwrap(), "VoteResponse");
+    assert_eq!(json.get("0").unwrap(), 5);
+    assert_eq!(json.get("1").unwrap(), true);
+    assert_eq!(json.get("2").unwrap(), "voter_a");
 }

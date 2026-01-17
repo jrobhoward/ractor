@@ -1,8 +1,8 @@
 //! Raft-based leader election for cluster nodes.
 //!
 //! This module implements a simplified Raft consensus algorithm focused on leader election.
-//! It provides actors that participate in leader election and can report their status
-//! via DynamicMessage for shell interaction.
+//! It provides actors that participate in leader election using typed messages for
+//! direct peer-to-peer communication with full network tracing support.
 //!
 //! ## Usage
 //!
@@ -25,29 +25,26 @@
 //!
 //! ## Shell Commands
 //!
-//! Once running, you can query the Raft node via the shell:
+//! Once running, you can query the Raft node via the shell using typed RPC:
 //!
 //! ```text
-//! ractor@local > call raft_node {"command": "is_leader"}
-//! {"is_leader": false, "node_name": "node1", "term": 1}
-//!
-//! ractor@local > call raft_node {"command": "get_leader"}
-//! {"leader": "node2", "term": 1}
-//!
-//! ractor@local > call raft_node {"command": "status"}
+//! ractor@local > call raft_node GetStatus {}
 //! {"node_name": "node1", "role": "Follower", "term": 1, "leader": "node2", "peers": 2}
+//!
+//! ractor@local > call raft_node IsLeader {}
+//! false
+//!
+//! ractor@local > call raft_node GetLeader {}
+//! "node2"
 //! ```
 
 use std::collections::HashMap;
 use std::time::Duration;
 
 use ractor::rpc::CallResult;
-use ractor::{pg, Actor, ActorProcessingErr, ActorRef};
+use ractor::{pg, Actor, ActorProcessingErr, ActorRef, RpcReplyPort};
+use ractor_cluster::RactorClusterMessage;
 use serde::{Deserialize, Serialize};
-
-use crate::dynamic::{CallResponse, DynamicMessage};
-use crate::introspection::INTROSPECTION_GROUP;
-use crate::protocol::ShellProtocolMessage;
 
 // ==================== Constants ====================
 
@@ -64,28 +61,66 @@ pub const DEFAULT_HEARTBEAT_INTERVAL_MS: u64 = 300;
 /// Peer discovery interval (ms)
 pub const PEER_DISCOVERY_INTERVAL_MS: u64 = 2000;
 
-// ==================== Internal Protocol Messages ====================
+// ==================== Typed Raft Messages ====================
 
-/// Internal message types encoded as JSON for Raft protocol
+/// Typed message for Raft peer-to-peer communication.
+///
+/// This message type derives `RactorClusterMessage` for binary serialization
+/// over the cluster network, enabling full tracing support.
+///
+/// Note: Uses tuple-style fields as required by RactorClusterMessage derive.
+#[derive(RactorClusterMessage, Debug)]
+#[ractor_shell]
+pub enum RaftMessage {
+    // ==================== Internal Timers ====================
+    // These are sent locally via send_after, not over the network
+    /// Election timeout fired (internal) - generation to detect stale timers
+    ElectionTimeout(u64),
+    /// Heartbeat timeout fired (internal) - generation
+    HeartbeatTimeout(u64),
+    /// Peer discovery timeout (internal) - generation
+    DiscoverPeers(u64),
+
+    // ==================== Peer Protocol Messages ====================
+    // These are sent between Raft nodes over the cluster network
+    /// Request vote: (term, candidate_name)
+    RequestVote(u64, String),
+    /// Vote response: (term, vote_granted, voter_name)
+    VoteResponse(u64, bool, String),
+    /// Heartbeat from leader: (term, leader_name)
+    Heartbeat(u64, String),
+
+    // ==================== Shell RPC Commands ====================
+    // These are called from the shell for introspection
+    /// Get full status of the Raft node
+    #[rpc]
+    GetStatus(RpcReplyPort<RaftStatus>),
+    /// Check if this node is the current leader
+    #[rpc]
+    IsLeader(RpcReplyPort<bool>),
+    /// Get the current leader's name (if known)
+    #[rpc]
+    GetLeader(RpcReplyPort<Option<String>>),
+    /// Get list of known peer names
+    #[rpc]
+    GetPeers(RpcReplyPort<Vec<String>>),
+}
+
+/// Status information returned by GetStatus RPC
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "raft_type")]
-pub enum RaftProtocol {
-    /// Election timeout fired (internal) - includes generation to detect stale timers
-    ElectionTimeout { generation: u64 },
-    /// Heartbeat timeout fired (internal) - includes generation
-    HeartbeatTimeout { generation: u64 },
-    /// Peer discovery timeout (internal) - includes generation
-    DiscoverPeers { generation: u64 },
-    /// Request vote from this node
-    RequestVote { term: u64, candidate_name: String },
-    /// Vote response
-    VoteResponse {
-        term: u64,
-        vote_granted: bool,
-        voter_name: String,
-    },
-    /// Heartbeat from leader
-    Heartbeat { term: u64, leader_name: String },
+pub struct RaftStatus {
+    /// Name of this node
+    pub node_name: String,
+    /// Current role (Follower, Candidate, Leader)
+    pub role: String,
+    /// Current term number
+    pub term: u64,
+    /// Current leader (if known)
+    pub leader: Option<String>,
+    /// Number of known peers
+    pub peers: usize,
+    /// Who this node voted for in the current term
+    pub voted_for: Option<String>,
 }
 
 // ==================== Configuration ====================
@@ -137,11 +172,11 @@ impl std::fmt::Display for RaftRole {
     }
 }
 
-/// Information about a remote peer (accessed via introspection)
+/// Information about a remote Raft peer
 #[derive(Debug, Clone)]
 struct PeerInfo {
-    /// Reference to the peer's introspection actor
-    introspection_ref: ActorRef<ShellProtocolMessage>,
+    /// Direct reference to the peer's RaftNode actor
+    raft_ref: ActorRef<RaftMessage>,
 }
 
 /// State for a Raft node
@@ -222,6 +257,18 @@ impl RaftState {
         self.discovery_timer_generation += 1;
         self.discovery_timer_generation
     }
+
+    /// Build a RaftStatus for RPC responses
+    fn get_status(&self) -> RaftStatus {
+        RaftStatus {
+            node_name: self.config.node_name.clone(),
+            role: self.role.to_string(),
+            term: self.current_term,
+            leader: self.current_leader.clone(),
+            peers: self.peer_count(),
+            voted_for: self.voted_for.clone(),
+        }
+    }
 }
 
 /// Response to a vote request (kept for test compatibility)
@@ -239,12 +286,12 @@ pub struct VoteResponse {
 
 /// Actor that participates in Raft leader election.
 ///
-/// This actor uses DynamicMessage as its message type for shell compatibility.
-/// Raft protocol messages are encoded as JSON and sent via remote introspection actors.
+/// This actor uses typed `RaftMessage` for direct peer-to-peer communication,
+/// enabling full network-level tracing via ractor_cluster.
 pub struct RaftNode;
 
 impl Actor for RaftNode {
-    type Msg = DynamicMessage;
+    type Msg = RaftMessage;
     type State = RaftState;
     type Arguments = RaftConfig;
 
@@ -253,27 +300,26 @@ impl Actor for RaftNode {
         myself: ActorRef<Self::Msg>,
         config: RaftConfig,
     ) -> Result<Self::State, ActorProcessingErr> {
-        // Join the Raft cluster process group (for local discovery)
+        // Join the Raft cluster process group for peer discovery
         pg::join(RAFT_CLUSTER_GROUP.to_string(), vec![myself.get_cell()]);
+
+        // Register schema for shell introspection
+        if let Some(name) = myself.get_name() {
+            crate::schema_registry::register::<RaftMessage>(&name);
+        }
 
         let mut state = RaftState::new(config);
 
         // Schedule initial peer discovery
         let gen = state.next_discovery_generation();
         myself.send_after(Duration::from_millis(500), move || {
-            DynamicMessage::Cast(
-                serde_json::to_value(&RaftProtocol::DiscoverPeers { generation: gen }).unwrap(),
-            )
+            RaftMessage::DiscoverPeers(gen)
         });
 
         // Schedule initial election timeout
         let timeout = state.election_timeout();
         let gen = state.next_election_generation();
-        myself.send_after(timeout, move || {
-            DynamicMessage::Cast(
-                serde_json::to_value(&RaftProtocol::ElectionTimeout { generation: gen }).unwrap(),
-            )
-        });
+        myself.send_after(timeout, move || RaftMessage::ElectionTimeout(gen));
 
         tracing::info!(
             node = %state.config.node_name,
@@ -290,230 +336,263 @@ impl Actor for RaftNode {
         state: &mut Self::State,
     ) -> Result<(), ActorProcessingErr> {
         match message {
-            DynamicMessage::Ping(reply) => {
-                let _ = reply.send(true);
+            // ==================== Internal Timers ====================
+            RaftMessage::DiscoverPeers(generation)
+                if generation == state.discovery_timer_generation =>
+            {
+                tracing::trace!(
+                    name = %state.config.node_name,
+                    "DiscoverPeers timer fired"
+                );
+                self.discover_peers(myself, state).await?;
             }
-            DynamicMessage::Cast(json) => {
-                self.handle_cast(myself, state, json).await?;
+            RaftMessage::ElectionTimeout(generation)
+                if generation == state.election_timer_generation =>
+            {
+                tracing::debug!(
+                    name = %state.config.node_name,
+                    term = state.current_term,
+                    role = ?state.role,
+                    "ElectionTimeout - starting election"
+                );
+                self.handle_election_timeout(myself, state).await?;
             }
-            DynamicMessage::Call(json, reply) => {
-                let response = self.handle_call_command(state, json);
-                let _ = reply.send(response);
+            RaftMessage::HeartbeatTimeout(generation)
+                if generation == state.heartbeat_timer_generation =>
+            {
+                tracing::trace!(
+                    name = %state.config.node_name,
+                    term = state.current_term,
+                    "HeartbeatTimeout - sending heartbeats"
+                );
+                self.handle_heartbeat_timeout(myself, state).await?;
             }
+
+            // ==================== Peer Protocol ====================
+            RaftMessage::RequestVote(term, ref candidate_name) => {
+                tracing::info!(
+                    name = %state.config.node_name,
+                    from = %candidate_name,
+                    term = term,
+                    current_term = state.current_term,
+                    "Received RequestVote"
+                );
+                self.handle_request_vote(myself, state, term, candidate_name.clone())
+                    .await?;
+            }
+            RaftMessage::VoteResponse(term, vote_granted, ref voter_name) => {
+                tracing::info!(
+                    name = %state.config.node_name,
+                    from = %voter_name,
+                    term = term,
+                    vote_granted = vote_granted,
+                    "Received VoteResponse"
+                );
+                self.handle_vote_response(myself, state, term, vote_granted, voter_name.clone())
+                    .await?;
+            }
+            RaftMessage::Heartbeat(term, ref leader_name) => {
+                tracing::debug!(
+                    name = %state.config.node_name,
+                    from = %leader_name,
+                    term = term,
+                    "Received Heartbeat"
+                );
+                self.handle_heartbeat(myself, state, term, leader_name.clone())
+                    .await?;
+            }
+
+            // ==================== Shell RPCs ====================
+            RaftMessage::GetStatus(reply) => {
+                tracing::debug!(
+                    name = %state.config.node_name,
+                    "RPC: GetStatus"
+                );
+                let _ = reply.send(state.get_status());
+            }
+            RaftMessage::IsLeader(reply) => {
+                tracing::debug!(
+                    name = %state.config.node_name,
+                    is_leader = state.is_leader(),
+                    "RPC: IsLeader"
+                );
+                let _ = reply.send(state.is_leader());
+            }
+            RaftMessage::GetLeader(reply) => {
+                tracing::debug!(
+                    name = %state.config.node_name,
+                    leader = ?state.current_leader,
+                    "RPC: GetLeader"
+                );
+                let _ = reply.send(state.current_leader.clone());
+            }
+            RaftMessage::GetPeers(reply) => {
+                tracing::debug!(
+                    name = %state.config.node_name,
+                    peer_count = state.peers.len(),
+                    "RPC: GetPeers"
+                );
+                let _ = reply.send(state.peers.keys().cloned().collect());
+            }
+
+            // Ignore stale timer events (generation mismatch)
+            _ => {}
         }
 
+        Ok(())
+    }
+
+    async fn post_stop(
+        &self,
+        myself: ActorRef<Self::Msg>,
+        _state: &mut Self::State,
+    ) -> Result<(), ActorProcessingErr> {
+        // Unregister schema
+        if let Some(name) = myself.get_name() {
+            crate::schema_registry::unregister(&name);
+        }
         Ok(())
     }
 }
 
 impl RaftNode {
-    /// Handle a cast message (internal protocol or external command)
-    async fn handle_cast(
-        &self,
-        myself: ActorRef<DynamicMessage>,
-        state: &mut RaftState,
-        json: serde_json::Value,
-    ) -> Result<(), ActorProcessingErr> {
-        // Try to parse as internal Raft protocol message
-        if let Ok(protocol) = serde_json::from_value::<RaftProtocol>(json.clone()) {
-            match protocol {
-                RaftProtocol::DiscoverPeers { generation } => {
-                    // Only process if generation matches (ignore stale timers)
-                    if generation == state.discovery_timer_generation {
-                        self.discover_peers(myself.clone(), state).await?;
-                    }
-                }
-                RaftProtocol::ElectionTimeout { generation } => {
-                    // Only process if generation matches (ignore stale timers)
-                    if generation == state.election_timer_generation {
-                        self.handle_election_timeout(myself, state).await?;
-                    }
-                }
-                RaftProtocol::HeartbeatTimeout { generation } => {
-                    // Only process if generation matches (ignore stale timers)
-                    if generation == state.heartbeat_timer_generation {
-                        self.handle_heartbeat_timeout(myself, state).await?;
-                    }
-                }
-                RaftProtocol::RequestVote {
-                    term,
-                    candidate_name,
-                } => {
-                    self.handle_request_vote(myself, state, term, candidate_name)
-                        .await?;
-                }
-                RaftProtocol::VoteResponse {
-                    term,
-                    vote_granted,
-                    voter_name,
-                } => {
-                    self.handle_vote_response(myself, state, term, vote_granted, voter_name)
-                        .await?;
-                }
-                RaftProtocol::Heartbeat { term, leader_name } => {
-                    self.handle_heartbeat(myself, state, term, leader_name)
-                        .await?;
-                }
-            }
-        }
-        // Silently ignore unknown messages (could be from shell)
-
-        Ok(())
-    }
-
-    /// Discover peers by finding remote introspection actors
+    /// Discover peers by finding other RaftNodes in the cluster process group
     async fn discover_peers(
         &self,
-        myself: ActorRef<DynamicMessage>,
+        myself: ActorRef<RaftMessage>,
         state: &mut RaftState,
     ) -> Result<(), ActorProcessingErr> {
-        // Find all introspection actors in the well-known group
-        let members = pg::get_members(&INTROSPECTION_GROUP.to_string());
+        // Find all Raft nodes in the cluster group
+        let members = pg::get_members(&RAFT_CLUSTER_GROUP.to_string());
 
-        // Filter for remote introspection actors
-        let remote_introspection: Vec<ActorRef<ShellProtocolMessage>> = members
-            .into_iter()
-            .filter(|cell| !cell.get_id().is_local())
-            .map(ActorRef::<ShellProtocolMessage>::from)
-            .collect();
+        // Filter for remote Raft nodes (skip local/self)
+        for cell in members {
+            if cell.get_id().is_local() {
+                continue; // Skip self
+            }
 
-        let discovered_count = remote_introspection.len();
-
-        // For each remote introspection actor, ping to get node name
-        for introspection_ref in remote_introspection {
-            // Skip if we already know this peer by actor ID
-            let actor_id = introspection_ref.get_id().to_string();
+            let actor_id = cell.get_id().to_string();
             if state
                 .peers
                 .values()
-                .any(|p| p.introspection_ref.get_id().to_string() == actor_id)
+                .any(|p| p.raft_ref.get_id().to_string() == actor_id)
             {
-                continue;
+                continue; // Already known
             }
 
-            // Ping to get node name
-            match introspection_ref
-                .call(ShellProtocolMessage::Ping, Some(Duration::from_millis(500)))
+            // Convert to typed reference
+            let raft_ref: ActorRef<RaftMessage> = ActorRef::from(cell.clone());
+
+            // Call GetStatus RPC to get the peer's node name
+            match raft_ref
+                .call(RaftMessage::GetStatus, Some(Duration::from_millis(500)))
                 .await
             {
-                Ok(CallResult::Success(pong)) => {
-                    // Extract node name from "pong from {node_name}"
-                    let node_name = pong.strip_prefix("pong from ").unwrap_or(&pong).to_string();
-
-                    if node_name != state.config.node_name && !state.peers.contains_key(&node_name)
+                Ok(CallResult::Success(status)) => {
+                    if status.node_name != state.config.node_name
+                        && !state.peers.contains_key(&status.node_name)
                     {
                         tracing::info!(
                             local = %state.config.node_name,
-                            peer = %node_name,
+                            peer = %status.node_name,
                             "Discovered Raft peer"
                         );
 
                         state
                             .peers
-                            .insert(node_name.clone(), PeerInfo { introspection_ref });
+                            .insert(status.node_name.clone(), PeerInfo { raft_ref });
                     }
                 }
                 _ => {
-                    // Failed to ping, skip this introspection actor
+                    // Failed to reach peer, skip
                 }
             }
         }
 
-        if discovered_count > 0 && state.peers.is_empty() {
-            tracing::debug!(
-                node = %state.config.node_name,
-                remote_introspection_count = discovered_count,
-                "Found remote introspection actors but no new peers"
-            );
-        }
-
-        // Schedule next peer discovery (with new generation to invalidate any pending)
+        // Schedule next peer discovery
         let gen = state.next_discovery_generation();
         myself.send_after(
             Duration::from_millis(PEER_DISCOVERY_INTERVAL_MS),
-            move || {
-                DynamicMessage::Cast(
-                    serde_json::to_value(&RaftProtocol::DiscoverPeers { generation: gen }).unwrap(),
-                )
-            },
+            move || RaftMessage::DiscoverPeers(gen),
         );
 
         Ok(())
     }
 
-    /// Send a Raft protocol message to all peers via their introspection actors
-    async fn broadcast_to_peers(&self, state: &RaftState, message: &RaftProtocol) {
-        let json = serde_json::to_value(message).unwrap();
-
-        for (_name, peer) in &state.peers {
-            // Send via introspection's SendDynamicMessage (fire and forget via spawned task)
-            let introspection_ref = peer.introspection_ref.clone();
-            let json_clone = json.clone();
-            tokio::spawn(async move {
-                let _ = introspection_ref
-                    .call(
-                        |reply| {
-                            ShellProtocolMessage::SendDynamicMessage(
-                                "raft_node".to_string(),
-                                json_clone,
-                                reply,
-                            )
-                        },
-                        Some(Duration::from_millis(200)),
-                    )
-                    .await;
-            });
+    /// Broadcast a RequestVote to all peers
+    fn broadcast_request_vote(&self, state: &RaftState, term: u64, candidate_name: &str) {
+        let peer_names: Vec<_> = state.peers.keys().cloned().collect();
+        tracing::info!(
+            name = %candidate_name,
+            term = term,
+            peers = ?peer_names,
+            "Broadcasting RequestVote"
+        );
+        for peer in state.peers.values() {
+            let _ = peer
+                .raft_ref
+                .cast(RaftMessage::RequestVote(term, candidate_name.to_string()));
         }
     }
 
-    /// Send a Raft protocol message to a specific peer
-    async fn send_to_peer(&self, state: &RaftState, peer_name: &str, message: &RaftProtocol) {
+    /// Broadcast a Heartbeat to all peers
+    fn broadcast_heartbeat(&self, state: &RaftState, term: u64, leader_name: &str) {
+        tracing::trace!(
+            name = %leader_name,
+            term = term,
+            peer_count = state.peers.len(),
+            "Broadcasting Heartbeat"
+        );
+        for peer in state.peers.values() {
+            let _ = peer
+                .raft_ref
+                .cast(RaftMessage::Heartbeat(term, leader_name.to_string()));
+        }
+    }
+
+    /// Send a VoteResponse to a specific peer
+    fn send_vote_response(
+        &self,
+        state: &RaftState,
+        peer_name: &str,
+        term: u64,
+        vote_granted: bool,
+        voter_name: &str,
+    ) {
+        tracing::info!(
+            from = %voter_name,
+            to = %peer_name,
+            term = term,
+            vote_granted = vote_granted,
+            "Sending VoteResponse"
+        );
         if let Some(peer) = state.peers.get(peer_name) {
-            let json = serde_json::to_value(message).unwrap();
-            let introspection_ref = peer.introspection_ref.clone();
-            tokio::spawn(async move {
-                let _ = introspection_ref
-                    .call(
-                        |reply| {
-                            ShellProtocolMessage::SendDynamicMessage(
-                                "raft_node".to_string(),
-                                json,
-                                reply,
-                            )
-                        },
-                        Some(Duration::from_millis(200)),
-                    )
-                    .await;
-            });
+            let _ = peer.raft_ref.cast(RaftMessage::VoteResponse(
+                term,
+                vote_granted,
+                voter_name.to_string(),
+            ));
         }
     }
 
     /// Schedule a new election timeout (invalidates any pending election timers)
-    fn schedule_election_timeout(myself: &ActorRef<DynamicMessage>, state: &mut RaftState) {
+    fn schedule_election_timeout(myself: &ActorRef<RaftMessage>, state: &mut RaftState) {
         let timeout = state.election_timeout();
         let gen = state.next_election_generation();
-        myself.send_after(timeout, move || {
-            DynamicMessage::Cast(
-                serde_json::to_value(&RaftProtocol::ElectionTimeout { generation: gen }).unwrap(),
-            )
-        });
+        myself.send_after(timeout, move || RaftMessage::ElectionTimeout(gen));
     }
 
     /// Schedule a new heartbeat timeout (invalidates any pending heartbeat timers)
-    fn schedule_heartbeat_timeout(myself: &ActorRef<DynamicMessage>, state: &mut RaftState) {
+    fn schedule_heartbeat_timeout(myself: &ActorRef<RaftMessage>, state: &mut RaftState) {
         let interval = state.heartbeat_interval();
         let gen = state.next_heartbeat_generation();
-        myself.send_after(interval, move || {
-            DynamicMessage::Cast(
-                serde_json::to_value(&RaftProtocol::HeartbeatTimeout { generation: gen }).unwrap(),
-            )
-        });
+        myself.send_after(interval, move || RaftMessage::HeartbeatTimeout(gen));
     }
 
     /// Handle election timeout - transition to candidate and request votes
     async fn handle_election_timeout(
         &self,
-        myself: ActorRef<DynamicMessage>,
+        myself: ActorRef<RaftMessage>,
         state: &mut RaftState,
     ) -> Result<(), ActorProcessingErr> {
         // Don't start election if we're already leader
@@ -547,11 +626,7 @@ impl RaftNode {
         );
 
         // Request votes from all peers
-        let vote_request = RaftProtocol::RequestVote {
-            term: state.current_term,
-            candidate_name: state.config.node_name.clone(),
-        };
-        self.broadcast_to_peers(state, &vote_request).await;
+        self.broadcast_request_vote(state, state.current_term, &state.config.node_name.clone());
 
         // Check if we already have majority (single node cluster)
         self.check_election_result(&myself, state).await?;
@@ -565,7 +640,7 @@ impl RaftNode {
     /// Handle vote request from a candidate
     async fn handle_request_vote(
         &self,
-        myself: ActorRef<DynamicMessage>,
+        myself: ActorRef<RaftMessage>,
         state: &mut RaftState,
         term: u64,
         candidate_name: String,
@@ -601,12 +676,13 @@ impl RaftNode {
         }
 
         // Send vote response back to the candidate
-        let response = RaftProtocol::VoteResponse {
-            term: state.current_term,
+        self.send_vote_response(
+            state,
+            &candidate_name,
+            state.current_term,
             vote_granted,
-            voter_name: state.config.node_name.clone(),
-        };
-        self.send_to_peer(state, &candidate_name, &response).await;
+            &state.config.node_name.clone(),
+        );
 
         Ok(())
     }
@@ -614,7 +690,7 @@ impl RaftNode {
     /// Handle vote response
     async fn handle_vote_response(
         &self,
-        myself: ActorRef<DynamicMessage>,
+        myself: ActorRef<RaftMessage>,
         state: &mut RaftState,
         term: u64,
         vote_granted: bool,
@@ -652,7 +728,7 @@ impl RaftNode {
     /// Check if we have enough votes to become leader
     async fn check_election_result(
         &self,
-        myself: &ActorRef<DynamicMessage>,
+        myself: &ActorRef<RaftMessage>,
         state: &mut RaftState,
     ) -> Result<(), ActorProcessingErr> {
         if state.role != RaftRole::Candidate {
@@ -676,7 +752,7 @@ impl RaftNode {
             );
 
             // Start sending heartbeats immediately
-            self.send_heartbeats(state).await?;
+            self.send_heartbeats(state);
 
             // Schedule heartbeat timer (with new generation)
             Self::schedule_heartbeat_timeout(myself, state);
@@ -688,14 +764,14 @@ impl RaftNode {
     /// Handle heartbeat timeout - send heartbeats to all peers
     async fn handle_heartbeat_timeout(
         &self,
-        myself: ActorRef<DynamicMessage>,
+        myself: ActorRef<RaftMessage>,
         state: &mut RaftState,
     ) -> Result<(), ActorProcessingErr> {
         if state.role != RaftRole::Leader {
             return Ok(());
         }
 
-        self.send_heartbeats(state).await?;
+        self.send_heartbeats(state);
 
         // Schedule next heartbeat (with new generation)
         Self::schedule_heartbeat_timeout(&myself, state);
@@ -704,19 +780,14 @@ impl RaftNode {
     }
 
     /// Send heartbeats to all peers
-    async fn send_heartbeats(&self, state: &RaftState) -> Result<(), ActorProcessingErr> {
-        let heartbeat = RaftProtocol::Heartbeat {
-            term: state.current_term,
-            leader_name: state.config.node_name.clone(),
-        };
-        self.broadcast_to_peers(state, &heartbeat).await;
-        Ok(())
+    fn send_heartbeats(&self, state: &RaftState) {
+        self.broadcast_heartbeat(state, state.current_term, &state.config.node_name.clone());
     }
 
     /// Handle heartbeat from leader
     async fn handle_heartbeat(
         &self,
-        myself: ActorRef<DynamicMessage>,
+        myself: ActorRef<RaftMessage>,
         state: &mut RaftState,
         term: u64,
         leader_name: String,
@@ -746,45 +817,6 @@ impl RaftNode {
         }
 
         Ok(())
-    }
-
-    /// Handle a call command and return response
-    pub fn handle_call_command(&self, state: &RaftState, json: serde_json::Value) -> CallResponse {
-        let command = json
-            .get("command")
-            .and_then(|v| v.as_str())
-            .unwrap_or("status");
-
-        match command {
-            "is_leader" => CallResponse::Success(serde_json::json!({
-                "is_leader": state.is_leader(),
-                "node_name": state.config.node_name,
-                "term": state.current_term,
-            })),
-            "get_leader" => CallResponse::Success(serde_json::json!({
-                "leader": state.current_leader,
-                "term": state.current_term,
-            })),
-            "status" => CallResponse::Success(serde_json::json!({
-                "node_name": state.config.node_name,
-                "role": state.role.to_string(),
-                "term": state.current_term,
-                "leader": state.current_leader,
-                "peers": state.peer_count(),
-                "voted_for": state.voted_for,
-            })),
-            "peers" => {
-                let peer_names: Vec<&String> = state.peers.keys().collect();
-                CallResponse::Success(serde_json::json!({
-                    "peers": peer_names,
-                    "count": peer_names.len(),
-                }))
-            }
-            _ => CallResponse::Error(format!(
-                "Unknown command: {}. Use: is_leader, get_leader, status, peers",
-                command
-            )),
-        }
     }
 }
 

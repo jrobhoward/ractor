@@ -24,7 +24,7 @@
 use crate::dynamic::{supports_dynamic_messages, CallResponse, DynamicMessage};
 use crate::protocol::{
     ActorInfo, ActorLocation, ClusterTopology, DynamicCallResult, DynamicSendResult, NodeInfo,
-    ShellProtocolMessage,
+    ShellProtocolMessage, TypedRpcResult,
 };
 use crate::DEFAULT_RPC_TIMEOUT;
 use std::collections::{HashMap, HashSet};
@@ -120,6 +120,27 @@ impl Actor for IntrospectionActor {
                 let result = call_dynamic_message_to_actor(&actor_name, json_value).await;
                 let _ = reply.send(result);
             }
+
+            // ==================== Schema Introspection ====================
+            ShellProtocolMessage::GetMessageSchema(actor_name, reply) => {
+                let schema = crate::schema_registry::get_schema(&actor_name);
+                let _ = reply.send(schema);
+            }
+
+            ShellProtocolMessage::ListSchemaActors(reply) => {
+                let schemas = crate::schema_registry::list_schemas();
+                let schema_actors: Vec<crate::protocol::SchemaActorInfo> = schemas
+                    .into_iter()
+                    .map(|(name, schema)| crate::protocol::SchemaActorInfo { name, schema })
+                    .collect();
+                let _ = reply.send(schema_actors);
+            }
+
+            // ==================== Typed RPC ====================
+            ShellProtocolMessage::CallTypedRpc(actor_name, variant_name, args, reply) => {
+                let result = call_typed_rpc_on_actor(&actor_name, &variant_name, args).await;
+                let _ = reply.send(result);
+            }
         }
 
         Ok(())
@@ -189,6 +210,119 @@ async fn call_dynamic_message_to_actor(
             DynamicCallResult::CallFailed("Sender error (actor may have stopped)".to_string())
         }
         Err(e) => DynamicCallResult::CallFailed(format!("{:?}", e)),
+    }
+}
+
+/// Call a typed RPC on a schema-enabled actor
+async fn call_typed_rpc_on_actor(
+    actor_name: &str,
+    variant_name: &str,
+    _args: serde_json::Value,
+) -> TypedRpcResult {
+    // Check if the actor has a registered schema
+    if !crate::schema_registry::has_schema(actor_name) {
+        return TypedRpcResult::NotSchemaEnabled;
+    }
+
+    // Find the actor in registry
+    let Some(cell) = registry::where_is(actor_name.to_string()) else {
+        return TypedRpcResult::ActorNotFound;
+    };
+
+    // Handle raft_node specifically (it's the main typed actor currently)
+    if actor_name == "raft_node" {
+        use crate::raft::RaftMessage;
+
+        let raft_ref: ActorRef<RaftMessage> = ActorRef::from(cell);
+
+        match variant_name {
+            "GetStatus" => {
+                let call_result = raft_ref
+                    .call(RaftMessage::GetStatus, Some(DEFAULT_RPC_TIMEOUT))
+                    .await;
+
+                match call_result {
+                    Ok(CallResult::Success(status)) => {
+                        let json = serde_json::to_value(&status).unwrap_or(serde_json::Value::Null);
+                        TypedRpcResult::Success(json)
+                    }
+                    Ok(CallResult::Timeout) => TypedRpcResult::CallFailed(format!(
+                        "Timeout after {:?}",
+                        DEFAULT_RPC_TIMEOUT
+                    )),
+                    Ok(CallResult::SenderError) => TypedRpcResult::CallFailed(
+                        "Sender error (actor may have stopped)".to_string(),
+                    ),
+                    Err(e) => TypedRpcResult::CallFailed(format!("{:?}", e)),
+                }
+            }
+            "IsLeader" => {
+                let call_result = raft_ref
+                    .call(RaftMessage::IsLeader, Some(DEFAULT_RPC_TIMEOUT))
+                    .await;
+
+                match call_result {
+                    Ok(CallResult::Success(is_leader)) => {
+                        TypedRpcResult::Success(serde_json::Value::Bool(is_leader))
+                    }
+                    Ok(CallResult::Timeout) => TypedRpcResult::CallFailed(format!(
+                        "Timeout after {:?}",
+                        DEFAULT_RPC_TIMEOUT
+                    )),
+                    Ok(CallResult::SenderError) => TypedRpcResult::CallFailed(
+                        "Sender error (actor may have stopped)".to_string(),
+                    ),
+                    Err(e) => TypedRpcResult::CallFailed(format!("{:?}", e)),
+                }
+            }
+            "GetLeader" => {
+                let call_result = raft_ref
+                    .call(RaftMessage::GetLeader, Some(DEFAULT_RPC_TIMEOUT))
+                    .await;
+
+                match call_result {
+                    Ok(CallResult::Success(leader)) => {
+                        let json = leader
+                            .map(serde_json::Value::String)
+                            .unwrap_or(serde_json::Value::Null);
+                        TypedRpcResult::Success(json)
+                    }
+                    Ok(CallResult::Timeout) => TypedRpcResult::CallFailed(format!(
+                        "Timeout after {:?}",
+                        DEFAULT_RPC_TIMEOUT
+                    )),
+                    Ok(CallResult::SenderError) => TypedRpcResult::CallFailed(
+                        "Sender error (actor may have stopped)".to_string(),
+                    ),
+                    Err(e) => TypedRpcResult::CallFailed(format!("{:?}", e)),
+                }
+            }
+            "GetPeers" => {
+                let call_result = raft_ref
+                    .call(RaftMessage::GetPeers, Some(DEFAULT_RPC_TIMEOUT))
+                    .await;
+
+                match call_result {
+                    Ok(CallResult::Success(peers)) => {
+                        let json = serde_json::to_value(&peers).unwrap_or(serde_json::Value::Null);
+                        TypedRpcResult::Success(json)
+                    }
+                    Ok(CallResult::Timeout) => TypedRpcResult::CallFailed(format!(
+                        "Timeout after {:?}",
+                        DEFAULT_RPC_TIMEOUT
+                    )),
+                    Ok(CallResult::SenderError) => TypedRpcResult::CallFailed(
+                        "Sender error (actor may have stopped)".to_string(),
+                    ),
+                    Err(e) => TypedRpcResult::CallFailed(format!("{:?}", e)),
+                }
+            }
+            _ => TypedRpcResult::UnknownVariant(variant_name.to_string()),
+        }
+    } else {
+        // For other schema-enabled actors, we would need a generic way to dispatch
+        // For now, return NotSchemaEnabled since we only have raft_node
+        TypedRpcResult::NotSchemaEnabled
     }
 }
 

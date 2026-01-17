@@ -179,6 +179,8 @@ pub mod pg;
 pub mod port;
 pub mod registry;
 pub mod rpc;
+#[cfg(feature = "shell-introspection")]
+pub mod schema;
 #[cfg(feature = "cluster")]
 pub mod serialization;
 pub mod thread_local;
@@ -219,6 +221,8 @@ pub use port::OutputPort;
 pub use port::RpcReplyPort;
 #[cfg(test)]
 use rand as _;
+#[cfg(feature = "shell-introspection")]
+pub use schema::{JsonDeserializeError, SchemaProvider};
 #[cfg(feature = "cluster")]
 pub use serialization::BytesConvertable;
 #[cfg(test)]

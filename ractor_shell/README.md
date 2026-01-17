@@ -52,20 +52,23 @@ Then query the Raft status:
 
 ```
 ractor@local > connect 127.0.0.1:9001
-ractor@local > call raft_node {"command": "status"}
+✓ Now using 127.0.0.1:9001
+
+ractor@127.0.0.1:9001 > call raft_node GetStatus {}
 {
   "leader": "node_a",
   "node_name": "node_a",
   "peers": 2,
   "role": "Leader",
-  "term": 1
+  "term": 6,
+  "voted_for": "node_a"
 }
 
-ractor@local > call raft_node {"command": "is_leader"}
-{"is_leader": true, "node_name": "node_a", "term": 1}
+ractor@127.0.0.1:9001 > call raft_node IsLeader {}
+true
 
-ractor@local > call raft_node {"command": "peers"}
-{"count": 2, "peers": ["node_b", "node_c"]}
+ractor@127.0.0.1:9001 > call raft_node GetPeers {}
+["node_b", "node_c"]
 ```
 
 ## Examples
@@ -129,14 +132,14 @@ The shell includes a Raft-based leader election implementation for testing distr
 
 ### Raft Commands
 
-Once connected to a cluster node, query the Raft state:
+Once connected to a cluster node, query the Raft state using typed messages:
 
 | Command | Description |
 |---------|-------------|
-| `call raft_node {"command": "is_leader"}` | Check if this node is the leader |
-| `call raft_node {"command": "get_leader"}` | Get the current leader's name |
-| `call raft_node {"command": "status"}` | Full status: role, term, leader, peer count |
-| `call raft_node {"command": "peers"}` | List all known peer nodes |
+| `call raft_node IsLeader {}` | Check if this node is the leader |
+| `call raft_node GetLeader {}` | Get the current leader's name |
+| `call raft_node GetStatus {}` | Full status: role, term, leader, peer count |
+| `call raft_node GetPeers {}` | List all known peer nodes |
 
 ### Manual Multi-Node Setup
 
@@ -157,16 +160,17 @@ cargo run --example demo -p ractor_shell
 Then in the shell:
 ```
 connect 127.0.0.1:9001
-call raft_node {"command": "status"}
+call raft_node GetStatus {}
 ```
 
 ### How It Works
 
 The Raft implementation uses:
-- **Introspection-based peer discovery**: Nodes find each other via the `INTROSPECTION_GROUP` process group
+- **Direct peer-to-peer communication**: Raft nodes communicate using typed `RaftMessage` over the cluster network
+- **Process group peer discovery**: Nodes find each other via the `RAFT_CLUSTER_GROUP` process group
 - **Leader election**: Standard Raft protocol with randomized election timeouts
 - **Heartbeats**: Leaders send periodic heartbeats to maintain authority
-- **DynamicMessage interface**: Raft nodes are queryable via the shell's `call` command
+- **Schema-enabled typed messages**: Raft nodes use `RaftMessage` with `#[derive(RactorClusterMessage)]` and `#[ractor_shell]` for typed shell queries
 
 ## Shell Commands
 
@@ -415,13 +419,14 @@ Cluster Nodes (3):
 
 ### Raft Status
 ```
-ractor@127.0.0.1:9001 > call raft_node {"command": "status"}
+ractor@127.0.0.1:9001 > call raft_node GetStatus {}
 {
   "leader": "node_a",
   "node_name": "node_a",
   "peers": 2,
   "role": "Leader",
-  "term": 1
+  "term": 6,
+  "voted_for": "node_a"
 }
 ```
 
