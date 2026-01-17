@@ -68,6 +68,7 @@ pub mod introspection;
 pub mod messages;
 pub mod monitor;
 pub mod protocol;
+pub mod raft;
 pub mod table;
 pub mod tracing;
 pub mod tui;
@@ -86,8 +87,12 @@ pub const DEFAULT_NODE_SERVER_PORT: u16 = 9100;
 pub const DEFAULT_CLUSTER_COOKIE: &str = "secret_cookie";
 
 /// Known process groups for local enumeration (ractor 0.15 doesn't expose group listing).
-pub const KNOWN_PROCESS_GROUPS: &[&str] =
-    &["ping_pong", "ractor_shell_introspection", "demo_group"];
+pub const KNOWN_PROCESS_GROUPS: &[&str] = &[
+    "ping_pong",
+    "ractor_shell_introspection",
+    "demo_group",
+    "raft_cluster",
+];
 
 use introspection::INTROSPECTION_GROUP;
 use protocol::{ClusterTopology, ShellProtocolMessage};

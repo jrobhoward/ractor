@@ -352,6 +352,7 @@ The `ractor_shell` provides an Erlang-style interactive shell for debugging and 
 - **Dynamic Messages**: Send arbitrary JSON messages to actors implementing `DynamicMessage`
 - **Monitoring**: Track actor lifecycle events (start, stop, panic, failure)
 - **Cluster Topology**: Visualize mesh topology and cross-cluster process groups
+- **Raft Leader Election**: Built-in Raft implementation for cluster demos
 - **Tab Completion**: Context-aware command and argument completion
 - **Command Aliases**: Short-form commands (e.g., `a` for `actors`, `r` for `registry`)
 
@@ -360,6 +361,9 @@ The `ractor_shell` provides an Erlang-style interactive shell for debugging and 
 ```bash
 # Run the demo (spawns test actors and starts shell)
 cargo run --example demo -p ractor_shell
+
+# Run the Raft cluster demo (3-node cluster with leader election)
+./ractor_shell/scripts/test_cluster.sh
 
 # Available commands in shell
 ractor@local > help
@@ -370,6 +374,11 @@ ractor@local > info <actor>     # Show actor details
 ractor@local > monitor <actor>  # Watch lifecycle events
 ractor@local > connect <host:port>  # Connect to remote node
 ractor@local > cluster          # Show cluster topology
+
+# Raft commands (after connecting to a cluster node)
+ractor@local > connect 127.0.0.1:9001
+ractor@local > call raft_node {"command": "status"}
+ractor@local > call raft_node {"command": "is_leader"}
 ```
 
 ### Dynamic Message Interface
@@ -391,9 +400,17 @@ ractor@local > send my_actor {"command": "increment"}
 ractor@local > call my_actor {"command": "get_value"}
 ```
 
+### Examples
+
+- `demo`: Basic shell with simple actors
+- `dynamic_actor`: Shows DynamicMessage API for JSON messaging
+- `monitoring_demo`: Actor lifecycle monitoring features
+- `cluster_node`: Raft cluster node for distributed testing
+
 ### Documentation
 
-- `ractor_shell/README.md`: Complete feature documentation
+- `ractor_shell/README.md`: Complete feature documentation and examples
+- `ractor_shell/ARCHITECTURE.md`: Internal architecture and design
 - `ractor_shell/DYNAMIC_MESSAGES.md`: Dynamic message interface guide
 - `ractor_shell/MONITORING.md`: Actor monitoring guide
 - `ractor_shell/UX_FEATURES.md`: Tab completion and aliases
@@ -402,9 +419,12 @@ ractor@local > call my_actor {"command": "get_value"}
 
 - Only shows named/registered actors (not all actors in system)
 - Process groups shown instead of full supervision trees
-- Remote message sending not yet fully implemented
 
-See `ractor_shell/README.md` for complete documentation and testing guides.
+See `ractor_shell/README.md` for complete documentation.
+
+**Important**: When working on ractor_shell, follow the conventions in:
+- `ractor_shell/SKILLS.md` - Development best practices (error handling, git workflow, code organization)
+- `ractor_shell/TESTING.md` - Test naming convention: `subject___condition___expected_result`
 
 ## Additional Resources
 

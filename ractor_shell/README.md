@@ -21,46 +21,12 @@ cargo run --example demo -p ractor_shell
 cargo install --path ractor_shell
 ```
 
-## Status: Phases 2, 3, 4, 5, 6 & 7 Complete ✓
-
-Full cluster topology awareness, enhanced introspection, file-based message/script input, actor lifecycle monitoring, and delightful UX with tab completion and aliases.
-
-### Implemented Commands
-
-| Command | Description | Status |
-|---------|-------------|--------|
-| `help [command]` | Show help/usage | ✅ |
-| `actors` | List all named actors (local or remote) | ✅ |
-| `registry` | Show registered actors (local or remote) | ✅ |
-| `pg list` | List process groups (with note) | ✅ |
-| `pg members <group>` | Show process group members (local or remote) | ✅ |
-| `info <actor>` | Show actor details (local or remote) | ✅ |
-| `send <actor> <msg>` | Send cast message (JSON) | ✅ Dynamic actors |
-| `call <actor> <msg>` | Send RPC message (JSON) | ✅ Dynamic actors |
-| `send-file <actor> <file>` | Send message from JSON file | ✅ Dynamic actors |
-| `load <script>` | Execute commands from script file | ✅ |
-| `stop <actor>` | Stop an actor | ✅ |
-| `connect <host:port>` | Connect to remote node | ✅ |
-| `disconnect <node>` | Disconnect from node | ✅ |
-| `nodes` | List connected nodes | ✅ |
-| `use <node>` | Switch to node context | ✅ |
-| `cluster` | Show cluster topology | ✅ |
-| `cluster nodes` | Show all nodes in cluster | ✅ |
-| `cluster groups` | Show process groups across cluster | ✅ |
-| `cluster actors` | Show all actors across cluster | ✅ |
-| `stats` | Show system statistics | ✅ |
-| `tree` | Show process group tree | ✅ |
-| `monitor <actor>` | Start monitoring actor events | ✅ |
-| `unmonitor <actor>` | Stop monitoring an actor | ✅ |
-| `monitors` | List monitored actors | ✅ |
-| `exit` / `quit` | Exit shell | ✅ |
-
 ## Quick Start
 
 ### Run the Demo
 
 ```bash
-cargo run --example demo
+cargo run --example demo -p ractor_shell
 ```
 
 This spawns 3 demo actors and starts the shell. Try:
@@ -74,7 +40,215 @@ ractor@local > stop demo_actor_1
 ractor@local > exit
 ```
 
-### Use in Your Code
+### Run the Raft Cluster Demo
+
+Start a 3-node cluster with Raft leader election:
+
+```bash
+./ractor_shell/scripts/test_cluster.sh
+```
+
+Then query the Raft status:
+
+```
+ractor@local > connect 127.0.0.1:9001
+ractor@local > call raft_node {"command": "status"}
+{
+  "leader": "node_a",
+  "node_name": "node_a",
+  "peers": 2,
+  "role": "Leader",
+  "term": 1
+}
+
+ractor@local > call raft_node {"command": "is_leader"}
+{"is_leader": true, "node_name": "node_a", "term": 1}
+
+ractor@local > call raft_node {"command": "peers"}
+{"count": 2, "peers": ["node_b", "node_c"]}
+```
+
+## Examples
+
+The following examples demonstrate different ractor_shell features:
+
+| Example | Command | Description |
+|---------|---------|-------------|
+| **demo** | `cargo run --example demo -p ractor_shell` | Basic shell with simple actors. Good starting point for learning shell commands. |
+| **dynamic_actor** | `cargo run --example dynamic_actor -p ractor_shell` | Shows how actors can receive JSON messages via `DynamicMessage`. Demonstrates `send` and `call` commands. |
+| **monitoring_demo** | `cargo run --example monitoring_demo -p ractor_shell` | Actor lifecycle monitoring with `monitor`, `unmonitor`, and `monitors` commands. |
+| **cluster_node** | `cargo run --example cluster_node -p ractor_shell -- --port 9001 --name node_a` | Cluster node with Raft leader election. Use with `test_cluster.sh` for multi-node testing. |
+
+### Example Details
+
+#### demo.rs
+The simplest example - spawns 3 named actors in a process group and starts the shell. Use this to explore basic commands like `actors`, `registry`, `pg members`, and `info`.
+
+#### dynamic_actor.rs
+Demonstrates the `DynamicMessage` interface that allows actors to receive arbitrary JSON from the shell. The example actor has a counter that can be incremented, reset, and queried:
+
+```bash
+send dynamic_actor {"command": "increment"}
+call dynamic_actor {"command": "get_counter"}
+call dynamic_actor {"command": "add", "amount": 5}
+```
+
+#### monitoring_demo.rs
+Shows actor lifecycle monitoring. Start monitoring actors to see when they stop or fail:
+
+```bash
+monitor demo_actor_1
+monitors              # List monitored actors
+stop demo_actor_1     # See the stop event
+```
+
+#### cluster_node.rs
+A full cluster node with:
+- `NodeServer` for cluster networking
+- `IntrospectionActor` for shell connectivity
+- `RaftNode` for leader election
+
+Can be started manually or via the `test_cluster.sh` script.
+
+## Raft Cluster Demo
+
+The shell includes a Raft-based leader election implementation for testing distributed features.
+
+### Quick Start
+
+```bash
+# Start a 3-node cluster with interactive shell
+./ractor_shell/scripts/test_cluster.sh
+
+# Or start 5 nodes
+./ractor_shell/scripts/test_cluster.sh --nodes 5
+
+# Start nodes only (no shell)
+./ractor_shell/scripts/test_cluster.sh --no-shell
+```
+
+### Raft Commands
+
+Once connected to a cluster node, query the Raft state:
+
+| Command | Description |
+|---------|-------------|
+| `call raft_node {"command": "is_leader"}` | Check if this node is the leader |
+| `call raft_node {"command": "get_leader"}` | Get the current leader's name |
+| `call raft_node {"command": "status"}` | Full status: role, term, leader, peer count |
+| `call raft_node {"command": "peers"}` | List all known peer nodes |
+
+### Manual Multi-Node Setup
+
+```bash
+# Terminal 1: Start node_a (seed node)
+cargo run --example cluster_node -p ractor_shell -- --port 9001 --name node_a
+
+# Terminal 2: Start node_b (connects to node_a)
+cargo run --example cluster_node -p ractor_shell -- --port 9002 --name node_b --peer 127.0.0.1:9001
+
+# Terminal 3: Start node_c (connects to node_a, discovers node_b)
+cargo run --example cluster_node -p ractor_shell -- --port 9003 --name node_c --peer 127.0.0.1:9001
+
+# Terminal 4: Start the shell and connect
+cargo run --example demo -p ractor_shell
+```
+
+Then in the shell:
+```
+connect 127.0.0.1:9001
+call raft_node {"command": "status"}
+```
+
+### How It Works
+
+The Raft implementation uses:
+- **Introspection-based peer discovery**: Nodes find each other via the `INTROSPECTION_GROUP` process group
+- **Leader election**: Standard Raft protocol with randomized election timeouts
+- **Heartbeats**: Leaders send periodic heartbeats to maintain authority
+- **DynamicMessage interface**: Raft nodes are queryable via the shell's `call` command
+
+## Shell Commands
+
+| Command | Alias | Description |
+|---------|-------|-------------|
+| `help [command]` | `h` | Show help/usage |
+| `actors` | `a` | List all named actors (local or remote) |
+| `registry` | `r` | Show registered actors (local or remote) |
+| `pg list` | | List process groups |
+| `pg members <group>` | | Show process group members |
+| `info <actor>` | `i` | Show actor details |
+| `send <actor> <json>` | `s` | Send cast message (fire-and-forget) |
+| `call <actor> <json>` | `c` | Send RPC message (request-reply) |
+| `send-file <actor> <file>` | | Send message from JSON file |
+| `load <script>` | | Execute commands from script file |
+| `stop <actor>` | | Stop an actor |
+| `connect <host:port>` | `con` | Connect to remote node |
+| `disconnect <node>` | `dis` | Disconnect from node |
+| `nodes` | `n` | List connected nodes |
+| `use <node>` | `u` | Switch to node context |
+| `cluster` | `cl` | Show cluster topology |
+| `cluster nodes` | | Show all nodes in cluster |
+| `cluster groups` | | Show process groups across cluster |
+| `cluster actors` | | Show all actors across cluster |
+| `stats` | | Show system statistics |
+| `tree` | `t` | Show process group tree |
+| `monitor <actor>` | `m` | Start monitoring actor events |
+| `unmonitor <actor>` | `um` | Stop monitoring an actor |
+| `monitors` | `ms` | List monitored actors |
+| `exit` / `quit` | `q` | Exit shell |
+
+## Features
+
+### Tab Completion
+
+Press **TAB** for context-aware completion:
+- Commands and subcommands
+- Actor names (after `info`, `send`, `call`, `stop`, `monitor`)
+- Process group names (after `pg members`)
+- Node names (after `use`, `disconnect`)
+
+### Command Aliases
+
+Use short forms for faster typing:
+- `a` → `actors`
+- `r` → `registry`
+- `i <actor>` → `info <actor>`
+- `s <actor> <msg>` → `send <actor> <msg>`
+- `c <actor> <msg>` → `call <actor> <msg>`
+- `con <addr>` → `connect <addr>`
+
+### Dynamic Messages
+
+Actors using `DynamicMessage` as their message type can receive JSON from the shell:
+
+```rust
+use ractor_shell::dynamic::DynamicMessage;
+
+impl Actor for MyActor {
+    type Msg = DynamicMessage;
+    // Handle Cast(json), Call(json, reply), Ping(reply) variants
+}
+```
+
+See [DYNAMIC_MESSAGES.md](DYNAMIC_MESSAGES.md) for the complete implementation guide.
+
+### Actor Monitoring
+
+Track actor lifecycle events:
+
+```
+ractor@local > monitor my_actor
+✓ Monitoring my_actor (0.1)
+
+ractor@local > stop my_actor
+✓ Sent stop signal to 'my_actor'
+[14:24:12.456] ▼ STOPPED my_actor (0.1)
+```
+
+See [MONITORING.md](MONITORING.md) for details.
+
+## Use in Your Code
 
 ```rust
 use ractor_shell::{ShellCommand, ShellState};
@@ -112,119 +286,9 @@ async fn main() -> anyhow::Result<()> {
 }
 ```
 
-## Testing with Multiple Nodes
-
-For testing cluster connectivity and distributed features, use the provided test script:
-
-### Automated Test Cluster
-
-```bash
-# Start 2 cluster nodes + interactive shell
-./scripts/test_cluster.sh
-
-# Start 3 nodes + shell
-./scripts/test_cluster.sh --nodes 3
-
-# Start nodes only (for manual testing)
-./scripts/test_cluster.sh --no-shell
-```
-
-The script automatically:
-- Builds the required examples
-- Starts N cluster nodes on sequential ports (9002, 9003, ...)
-- Logs each node's output to `/tmp/ractor_node_*.log`
-- Starts the interactive shell with connection instructions
-- Cleans up all nodes on exit (Ctrl+C)
-
-### Manual Multi-Node Testing
-
-```bash
-# Terminal 1: Start node_a
-cargo run --example cluster_node -p ractor_shell -- --port 9002 --name node_a
-
-# Terminal 2: Start node_b
-cargo run --example cluster_node -p ractor_shell -- --port 9003 --name node_b
-
-# Terminal 3: Start the shell
-cargo run --example demo -p ractor_shell
-
-# In the shell:
-ractor@local > connect 127.0.0.1:9002
-ractor@local > connect 127.0.0.1:9003
-ractor@local > nodes
-ractor@local > use 127.0.0.1:9002
-ractor@127.0.0.1:9002 > registry
-ractor@127.0.0.1:9002 > pg members workers
-ractor@127.0.0.1:9002 > call worker_1 {"command": "status"}
-ractor@127.0.0.1:9002 > cluster
-```
-
-## Features
-
-### ✅ Implemented (Phases 1, 2, 4, 5, 6, 7)
-
-- **Rich help system** with per-command documentation
-- **Actor listing** from registry (named actors only)
-- **Process group querying** to find actors by group membership
-- **Actor introspection** showing ID, status, and name
-- **Actor control** with stop command
-- **Colored output** for better readability
-- **Table formatting** for structured data
-- **Command history** with readline support
-- **Error handling** with helpful messages
-- **Remote connection** to ractor_cluster nodes
-- **Node context switching** with `use` command
-- **Remote introspection** via IntrospectionActor and RPC
-- **Multi-node management** with connect/disconnect
-- **Automatic topology discovery** on connect
-- **Cluster-wide visibility** of nodes, actors, and process groups
-- **Mesh topology commands** (`cluster`, `cluster groups`, `cluster actors`)
-- **Topology caching** for quick access
-- **System statistics** (`stats` command) showing actor counts and statuses
-- **Process group tree** (`tree` command) with visual hierarchy
-- **Both local and remote stats** support
-- **JSON message parsing** for send and call commands
-- **File-based message input** with `send-file` command
-- **Shell script execution** with `load` command
-- **Dynamic message interface** - Actors using `DynamicMessage` can receive JSON from the shell
-- **Actual message sending** - send/call commands work for dynamic actors
-- **Educational explanations** for actors that don't support dynamic messages
-- **Tab completion** - Context-aware completion for commands, actors, process groups, and nodes
-- **Command aliases** - Short forms like `a` for `actors`, `r` for `registry`, `s` for `send`
-- **Smart hints** - Inline hints showing alias expansions
-- **Persistent command history** - Navigate previous commands with arrow keys
-- **Actor monitoring** - Track lifecycle events (start, stop, panic, kill) for specific actors
-- **Monitor management** - Start/stop monitoring actors, list currently monitored actors
-- **Colored event display** - Visual formatting for different event types with timestamps
-
-### 🚧 Current Limitations
-
-**Addressable now (workarounds exist):**
-
-- **Dynamic messages opt-in**: Actors must use `DynamicMessage` as their message type to receive JSON from the shell. This is by design - Rust's type safety prevents sending arbitrary messages to typed actors.
-
-**Requires ractor core API additions (Phase 2):**
-
-- **Named actors only**: Only actors registered in the registry (named actors) are visible. Full actor enumeration would require a `get_all_actors()` API in ractor core.
-- **Process groups instead of supervision trees**: True supervision tree visualization requires exposing supervision relationships in ractor core.
-- **Monitoring limited to stored state**: The `monitor` command records actors to watch, but real-time event delivery requires linking to monitored actors. Full implementation needs either:
-  - Linking MonitorActor to targets (changes supervision hierarchy)
-  - Global event subscription API in ractor core
-
-See [ARCHITECTURE.md](ARCHITECTURE.md) for design decisions and trade-offs.
-
 ## Output Examples
 
-### Registry Listing
-```
-ractor@local > registry
-Registered Actors (3):
-  demo_actor_1 → 0.0
-  demo_actor_2 → 0.1
-  demo_actor_3 → 0.2
-```
-
-### Actor Table
+### Actor Listing
 ```
 ractor@local > actors
 +--------------+-----+---------+
@@ -236,280 +300,80 @@ ractor@local > actors
 +--------------+-----+---------+
 ```
 
-### Process Group Members
+### Cluster Topology
 ```
-ractor@local > pg members demo_group
-+----------+--------------+-------+
-| Actor ID | Name         | Local |
-+----------+--------------+-------+
-| 0.0      | demo_actor_1 | yes   |
-| 0.1      | demo_actor_2 | yes   |
-| 0.2      | demo_actor_3 | yes   |
-+----------+--------------+-------+
-```
-
-### Actor Details
-```
-ractor@local > info demo_actor_1
-Actor: demo_actor_1
-  ID:     0.0
-  Status: Running
-  Name:   demo_actor_1
-```
-
-### Remote Connection (Phase 5)
-```
-ractor@local > connect 127.0.0.1:9002
-Connecting to 127.0.0.1:9002
-  Starting local NodeServer...
-  ✓ NodeServer started on port 9100
-  ✓ Connected to 127.0.0.1:9002
-  Discovering introspection actor...
-  ✓ pong from node_b
-✓ Connected to node at 127.0.0.1:9002
-
-ractor@local > nodes
-Connected Nodes (1):
-  • 127.0.0.1:9002
-
-ractor@local > use 127.0.0.1:9002
-✓ Switched to node 127.0.0.1:9002
-
-ractor@127.0.0.1:9002 > registry
-Registered Actors on 127.0.0.1:9002 (2):
-  ping_pong → 1.0
-  introspection → 1.1
-
-ractor@127.0.0.1:9002 > pg members ping_pong
-+----------+-------------+-------+
-| Actor ID | Name        | Local |
-+----------+-------------+-------+
-| 1.0      | ping_pong   | yes   |
-| 2.0      | ping_pong   | no    |
-+----------+-------------+-------+
-```
-
-### Cluster Topology (Phase 6)
-```
-ractor@local > connect 127.0.0.1:9002
-Connecting to 127.0.0.1:9002
-  Starting local NodeServer...
-  ✓ NodeServer started on port 9100
-  ✓ Connected to 127.0.0.1:9002
-  Discovering introspection actor...
-  ✓ pong from node_b
-✓ Connected to node at 127.0.0.1:9002
-  Discovering cluster topology...
-  ✓ Discovered 2 nodes and 2 process groups
-
 ractor@local > cluster
-Fetching cluster topology...
-
-Cluster Nodes (2):
+Cluster Nodes (3):
 
 +---------+-----------+--------+-------+
 | Node ID | Node Name | Actors | Local |
 +---------+-----------+--------+-------+
-| 1       | node_b    | 2      | yes   |
-| 2       | node_a    | 0      | no    |
+| 1       | node_a    | 3      | yes   |
+| 2       | node_b    | 3      | no    |
+| 3       | node_c    | 3      | no    |
 +---------+-----------+--------+-------+
-
-ractor@local > cluster groups
-Fetching cluster topology...
-
-Process Groups (2):
-
-Group: ping_pong
-+----------+-------------+--------------+
-| Actor ID | Name        | Node         |
-+----------+-------------+--------------+
-| 1.0      | ping_pong   | node_b (1)   |
-| 2.0      | ping_pong   | node_a (2)   |
-+----------+-------------+--------------+
-
-Group: ractor_shell_introspection
-+----------+----------------+--------------+
-| Actor ID | Name           | Node         |
-+----------+----------------+--------------+
-| 1.1      | introspection  | node_b (1)   |
-| 2.1      | introspection  | node_a (2)   |
-+----------+----------------+--------------+
 ```
 
-### Actor Monitoring (Phase 3)
+### Raft Status
 ```
-ractor@local > registry
-Registered Actors (5):
-  demo_actor_1 → 0.1
-  demo_actor_2 → 0.2
-  demo_actor_3 → 0.3
-  panicky_actor → 0.4
-  shell_monitor → 0.0
-
-ractor@local > monitor demo_actor_1
-✓ Monitoring demo_actor_1 (0.1)
-
-ractor@local > monitors
-Monitored Actors:
-  • demo_actor_1
-
-ractor@local > stop demo_actor_1
-✓ Sent stop signal to 'demo_actor_1'
-
-# When fully integrated, you'll see:
-# [14:24:12.456] ▼ STOPPED demo_actor_1 (0.1) - Stopped by shell
+ractor@127.0.0.1:9001 > call raft_node {"command": "status"}
+{
+  "leader": "node_a",
+  "node_name": "node_a",
+  "peers": 2,
+  "role": "Leader",
+  "term": 1
+}
 ```
 
 ## Architecture
+
+See [ARCHITECTURE.md](ARCHITECTURE.md) for detailed component diagrams and design decisions.
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
 │                         ractor_shell                              │
 ├──────────────────────────────────────────────────────────────────┤
-│                                                                   │
 │  ┌────────────┐      ┌─────────────────────────────────────────┐ │
 │  │   REPL     │      │             ShellState                  │ │
 │  │   Loop     │─────▶│  - current_node (local/remote context)  │ │
 │  │            │      │  - connected_nodes                      │ │
 │  │ rustyline  │      │  - cluster_topology (cached)            │ │
-│  │ - history  │      │  - monitor_actor                        │ │
-│  │ - complete │      └─────────────────────────────────────────┘ │
-│  └────────────┘                      │                           │
-│        │                             │ execute(cmd)              │
+│  └────────────┘      └─────────────────────────────────────────┘ │
+│        │                             │                           │
 │        ▼                             ▼                           │
 │  ┌────────────┐      ┌─────────────────────────────────────────┐ │
 │  │ShellCommand│      │         Command Dispatcher              │ │
-│  │ parse_line │      │                                         │ │
-│  │            │      │  Local Path          Remote Path        │ │
-│  │ - aliases  │      │  ractor::registry ─┐ ┌─ RPC call        │ │
-│  │ - args     │      │  ractor::pg ───────┼─┼─▶ to remote      │ │
-│  └────────────┘      │                    │ │   Introspection  │ │
-│                      └────────────────────┼─┼──────────────────┘ │
-│                                           │ │                    │
-│  ┌────────────────────────────────────────┼─┼──────────────────┐ │
-│  │              MonitorActor              │ │                  │ │
-│  │  - Tracks monitored actors             │ │                  │ │
-│  │  - Receives SupervisionEvents          │ │                  │ │
-│  │  - Displays lifecycle events           │ │                  │ │
-│  └────────────────────────────────────────┼─┼──────────────────┘ │
-└───────────────────────────────────────────┼─┼────────────────────┘
-                                            │ │
-               ┌────────────────────────────┘ │
-               │                              │
-               ▼                              ▼
-┌──────────────────────────────┐  ┌──────────────────────────────┐
-│       Ractor Runtime         │  │       Remote Node            │
-├──────────────────────────────┤  ├──────────────────────────────┤
-│  ┌──────────┐  ┌──────────┐  │  │  ┌────────────────────────┐  │
-│  │ Registry │  │ Process  │  │  │  │  IntrospectionActor    │  │
-│  │          │  │ Groups   │  │  │  │                        │  │
-│  │ Named    │  │          │  │  │  │  Joins pg group:       │  │
-│  │ actors   │  │ pg join  │  │  │  │  ractor_shell_         │  │
-│  │          │  │ pg get   │  │  │  │    introspection       │  │
-│  └──────────┘  └──────────┘  │  │  │                        │  │
-│                              │  │  │  Responds to:          │  │
-│  ┌──────────────────────────┐│  │  │  - ListActors          │  │
-│  │   User Actors            ││  │  │  - GetInfo             │  │
-│  │   (DynamicMessage opt-in)││  │  │  - GetTopology         │  │
-│  └──────────────────────────┘│  │  └────────────────────────┘  │
-└──────────────────────────────┘  └──────────────────────────────┘
+│  │ parse_line │      │  Local Path ──────── Remote Path        │ │
+│  │ + aliases  │      │  ractor::registry    RPC to remote      │ │
+│  └────────────┘      │  ractor::pg          IntrospectionActor │ │
+│                      └─────────────────────────────────────────┘ │
+└──────────────────────────────────────────────────────────────────┘
 ```
 
-### Component Flows
+## Documentation
 
-**Local Introspection Flow:**
-```
-User → "actors" → ShellState.execute() → ractor::registry::registered()
-                                      → Display table
-```
+| Document | Description |
+|----------|-------------|
+| [ARCHITECTURE.md](ARCHITECTURE.md) | Internal architecture and design decisions |
+| [DYNAMIC_MESSAGES.md](DYNAMIC_MESSAGES.md) | How to create actors that receive JSON from the shell |
+| [MONITORING.md](MONITORING.md) | Actor lifecycle monitoring guide |
+| [UX_FEATURES.md](UX_FEATURES.md) | Tab completion and command aliases |
+| [TESTING.md](TESTING.md) | Testing conventions for contributors |
+| [SKILLS.md](SKILLS.md) | Development best practices |
 
-**Remote Introspection Flow:**
-```
-User → "actors" → ShellState.execute() → RPC to IntrospectionActor
-                                      → Receives Vec<ActorInfo>
-                                      → Display table
-```
+## Current Limitations
 
-**Monitor Flow:**
-```
-User → "monitor foo" → MonitorActor → Stores actor_id in map
-           ↓
-    ... actor stops ...
-           ↓
-SupervisionEvent → MonitorActor → Format & display event
-```
+**By design:**
+- **Dynamic messages opt-in**: Actors must use `DynamicMessage` as their message type to receive JSON from the shell. This preserves Rust's type safety.
 
-For detailed architecture documentation, see [ARCHITECTURE.md](ARCHITECTURE.md).
-
-## Roadmap
-
-See [REPL_PLANNING.md](../REPL_PLANNING.md) for the full feature roadmap.
-
-### Phase 1: Local Foundation ✅
-- Basic REPL with rustyline
-- Local actor introspection
-- Process group queries
-- Actor control (stop)
-
-### Phase 2: Introspection & Display ✅
-- `stats` command showing system statistics
-- `tree` command with visual process group hierarchy
-- Actor count breakdowns by status
-- Cluster-aware statistics
-- Works both locally and remotely
-- See [TESTING_PHASE2.md](TESTING_PHASE2.md) for testing guide
-- **Note**: True supervision trees require ractor core API additions
-
-### Phase 3: Linking & Monitoring ✅
-- `monitor <actor>` command to start tracking actor lifecycle events
-- `unmonitor <actor>` command to stop monitoring
-- `monitors` command to list currently monitored actors
-- MonitorActor infrastructure for event tracking
-- Colored, timestamped event display formatting
-- Event history with configurable size
-- See [MONITORING.md](MONITORING.md) for complete guide
-- See [TESTING_PHASE3.md](TESTING_PHASE3.md) for testing guide
-- **Note**: Real-time event display pending deeper ractor supervision integration
-
-### Phase 5: Remote Connection ✅
-- `connect` to remote ractor_cluster nodes
-- Multi-node context switching with `use` command
-- Remote command execution via IntrospectionActor
-- RPC-based introspection protocol
-- See [TESTING_PHASE5.md](TESTING_PHASE5.md) for testing guide
-
-### Phase 6: Mesh Topology Awareness ✅
-- Automatic cluster topology discovery on connect
-- `cluster` command with multiple subcommands
-- Cluster-wide node visibility
-- Cross-cluster process group queries
-- View all actors across the mesh
-- Topology caching for performance
-- See [TESTING_PHASE6.md](TESTING_PHASE6.md) for testing guide
-
-### Phase 4: File & Message Input ✅
-- Enhanced `send` and `call` commands with JSON parsing
-- `send-file` command for message construction from files
-- `load` command for script execution
-- **DynamicMessage interface** - Actors can opt-in to receive JSON from the shell
-- **Actual message sending** - Works for actors using `DynamicMessage`
-- Auto-detection of dynamic message support
-- Educational explanations for non-dynamic actors
-- See [TESTING_PHASE4.md](TESTING_PHASE4.md) for testing guide
-- See [DYNAMIC_MESSAGES.md](DYNAMIC_MESSAGES.md) for implementation guide
-
-### Phase 7: UX Polish ✅
-- **Tab completion** - Context-aware completion for all commands and arguments
-- **Command aliases** - Short forms like `a`, `r`, `i`, `s`, `c`, etc.
-- **Smart hints** - Inline hints showing what aliases expand to
-- **Persistent history** - Command history with arrow key navigation
-- Better error messages and visual feedback
-- See [UX_FEATURES.md](UX_FEATURES.md) for complete guide
-- See [TESTING_PHASE7.md](TESTING_PHASE7.md) for testing guide
+**Requires ractor core API additions:**
+- **Named actors only**: Only actors in the registry are visible. Full enumeration needs a `get_all_actors()` API.
+- **Process groups instead of supervision trees**: True supervision visualization requires exposing supervision relationships in ractor core.
 
 ## Contributing
 
-This is an experimental project. See [REPL_PLANNING.md](../REPL_PLANNING.md) for design decisions and open questions.
+Contributions welcome! See [ARCHITECTURE.md](ARCHITECTURE.md) for design context.
 
 ## License
 

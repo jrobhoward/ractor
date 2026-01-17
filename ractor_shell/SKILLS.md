@@ -2,6 +2,15 @@
 
 This document captures best practices and conventions specific to the ractor_shell workspace member.
 
+## Git Workflow
+
+**The user controls git operations.** Do not commit, push, or create branches without explicit user request.
+
+- **Never auto-commit**: Wait for the user to request a commit
+- **Never push**: The user decides when and where to push
+- **Describe changes**: When asked to commit, summarize what changed clearly
+- **Stage selectively**: Only stage files related to the current task
+
 ## Error Handling
 
 ### Use `thiserror` for Error Types

@@ -1,13 +1,20 @@
 #!/usr/bin/env bash
 #
-# test_cluster.sh - Start a local cluster for testing ractor_shell
+# test_cluster.sh - Start a Raft cluster for testing ractor_shell
 #
-# This script starts multiple cluster nodes and the shell for interactive testing.
+# This script starts a 3-node cluster with Raft leader election.
+# Nodes automatically connect and elect a leader.
 #
 # Usage:
-#   ./scripts/test_cluster.sh           # Start 2 nodes + shell
-#   ./scripts/test_cluster.sh --nodes 3 # Start 3 nodes + shell
-#   ./scripts/test_cluster.sh --no-shell # Start nodes only (for manual shell testing)
+#   ./scripts/test_cluster.sh           # Start 3 nodes + shell (default)
+#   ./scripts/test_cluster.sh --nodes 5 # Start 5 nodes + shell
+#   ./scripts/test_cluster.sh --no-shell # Start nodes only (for manual testing)
+#
+# Raft Commands (via shell):
+#   call raft_node {"command": "is_leader"}   - Check if node is leader
+#   call raft_node {"command": "get_leader"}  - Get current leader name
+#   call raft_node {"command": "status"}      - Get full status
+#   call raft_node {"command": "peers"}       - List connected peers
 #
 
 set -e
@@ -17,8 +24,8 @@ PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 REPO_ROOT="$(cd "$PROJECT_DIR/.." && pwd)"
 
 # Default configuration
-NUM_NODES=2
-START_PORT=9002
+NUM_NODES=3
+START_PORT=9001
 COOKIE="secret_cookie"
 START_SHELL=true
 PIDS=()
@@ -28,11 +35,12 @@ RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 CYAN='\033[0;36m'
+BOLD='\033[1m'
 NC='\033[0m' # No Color
 
 print_header() {
     echo -e "${CYAN}════════════════════════════════════════════════════════════${NC}"
-    echo -e "${CYAN}  Ractor Shell - Local Cluster Test Environment${NC}"
+    echo -e "${CYAN}  ${BOLD}Ractor Shell - Raft Cluster Test Environment${NC}"
     echo -e "${CYAN}════════════════════════════════════════════════════════════${NC}"
     echo
 }
@@ -41,16 +49,22 @@ print_usage() {
     echo "Usage: $0 [OPTIONS]"
     echo
     echo "Options:"
-    echo "  --nodes N      Number of cluster nodes to start (default: 2)"
-    echo "  --port PORT    Starting port number (default: 9002)"
+    echo "  --nodes N      Number of cluster nodes to start (default: 3)"
+    echo "  --port PORT    Starting port number (default: 9001)"
     echo "  --cookie STR   Cluster authentication cookie (default: secret_cookie)"
     echo "  --no-shell     Don't start the interactive shell"
     echo "  --help         Show this help message"
     echo
     echo "Examples:"
-    echo "  $0                    # Start 2 nodes + shell"
-    echo "  $0 --nodes 3          # Start 3 nodes + shell"
-    echo "  $0 --no-shell         # Start nodes only"
+    echo "  $0                    # Start 3-node Raft cluster + shell"
+    echo "  $0 --nodes 5          # Start 5-node cluster + shell"
+    echo "  $0 --no-shell         # Start cluster only (for manual testing)"
+    echo
+    echo "Raft Commands (use via shell 'call' command):"
+    echo "  {\"command\": \"is_leader\"}   - Check if node is the leader"
+    echo "  {\"command\": \"get_leader\"}  - Get current leader name"
+    echo "  {\"command\": \"status\"}      - Get full node status"
+    echo "  {\"command\": \"peers\"}       - List connected peers"
     echo
 }
 
@@ -104,6 +118,12 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+# Validate minimum nodes
+if [ "$NUM_NODES" -lt 1 ]; then
+    echo -e "${RED}Error: Must have at least 1 node${NC}"
+    exit 1
+fi
+
 # Set up cleanup trap
 trap cleanup EXIT INT TERM
 
@@ -118,29 +138,69 @@ echo -e "${GREEN}Build complete.${NC}"
 echo
 
 # Start cluster nodes
-echo -e "${YELLOW}Starting $NUM_NODES cluster nodes...${NC}"
+echo -e "${YELLOW}Starting $NUM_NODES-node Raft cluster...${NC}"
 echo
 
 NODE_ADDRS=()
+NODE_NAMES=()
+
+# Generate node names (node_a, node_b, node_c, ...)
 for i in $(seq 1 $NUM_NODES); do
+    # Convert number to letter (1=a, 2=b, etc.)
+    letter=$(printf "\\$(printf '%03o' $((96 + i)))")
+    NODE_NAMES+=("node_$letter")
+done
+
+# Start the first node (no peer connection needed)
+FIRST_PORT=$START_PORT
+FIRST_NAME="${NODE_NAMES[0]}"
+NODE_ADDRS+=("127.0.0.1:$FIRST_PORT")
+
+echo -e "  Starting ${CYAN}$FIRST_NAME${NC} on port ${CYAN}$FIRST_PORT${NC} (seed node)..."
+
+LOG_FILE="/tmp/ractor_${FIRST_NAME}.log"
+cargo run --example cluster_node -p ractor_shell --quiet -- \
+    --port "$FIRST_PORT" \
+    --name "$FIRST_NAME" \
+    --cookie "$COOKIE" \
+    > "$LOG_FILE" 2>&1 &
+
+NODE_PID=$!
+PIDS+=($NODE_PID)
+
+# Give the first node time to start and bind
+sleep 1
+
+# Check if it's still running
+if ! kill -0 "$NODE_PID" 2>/dev/null; then
+    echo -e "${RED}  Failed to start $FIRST_NAME. Check $LOG_FILE for details.${NC}"
+    cat "$LOG_FILE"
+    exit 1
+fi
+
+echo -e "  ${GREEN}✓${NC} $FIRST_NAME started (PID: $NODE_PID)"
+
+# Start remaining nodes, connecting to the first node
+# (transitive mode will automatically connect them to each other)
+for i in $(seq 2 $NUM_NODES); do
     PORT=$((START_PORT + i - 1))
-    NODE_NAME="node_$i"
+    NODE_NAME="${NODE_NAMES[$((i-1))]}"
     NODE_ADDRS+=("127.0.0.1:$PORT")
 
-    echo -e "  Starting ${CYAN}$NODE_NAME${NC} on port ${CYAN}$PORT${NC}..."
+    echo -e "  Starting ${CYAN}$NODE_NAME${NC} on port ${CYAN}$PORT${NC} (connecting to $FIRST_NAME)..."
 
-    # Start node in background, redirect output to a log file
-    LOG_FILE="/tmp/ractor_node_${NODE_NAME}.log"
+    LOG_FILE="/tmp/ractor_${NODE_NAME}.log"
     cargo run --example cluster_node -p ractor_shell --quiet -- \
         --port "$PORT" \
         --name "$NODE_NAME" \
         --cookie "$COOKIE" \
+        --peer "127.0.0.1:$FIRST_PORT" \
         > "$LOG_FILE" 2>&1 &
 
     NODE_PID=$!
     PIDS+=($NODE_PID)
 
-    # Give the node a moment to start
+    # Give the node time to start and connect
     sleep 0.5
 
     # Check if it's still running
@@ -149,45 +209,60 @@ for i in $(seq 1 $NUM_NODES); do
         exit 1
     fi
 
-    echo -e "  ${GREEN}✓${NC} $NODE_NAME started (PID: $NODE_PID, log: $LOG_FILE)"
+    echo -e "  ${GREEN}✓${NC} $NODE_NAME started (PID: $NODE_PID)"
 done
 
+# Wait for cluster to stabilize and elect a leader
 echo
-echo -e "${GREEN}All nodes started successfully.${NC}"
+echo -e "${YELLOW}Waiting for Raft leader election...${NC}"
+sleep 2
+
+echo
+echo -e "${GREEN}Cluster started successfully.${NC}"
 echo
 
-# Print connection instructions
+# Print cluster information
 echo -e "${CYAN}────────────────────────────────────────────────────────────${NC}"
-echo -e "${CYAN}  Cluster Information${NC}"
+echo -e "${CYAN}  ${BOLD}Cluster Information${NC}"
 echo -e "${CYAN}────────────────────────────────────────────────────────────${NC}"
 echo
 echo "  Nodes running:"
 for i in $(seq 1 $NUM_NODES); do
     PORT=$((START_PORT + i - 1))
-    echo -e "    ${GREEN}•${NC} node_$i at 127.0.0.1:$PORT"
+    NAME="${NODE_NAMES[$((i-1))]}"
+    echo -e "    ${GREEN}•${NC} $NAME at 127.0.0.1:$PORT"
 done
 echo
 echo "  Log files:"
 for i in $(seq 1 $NUM_NODES); do
-    echo "    /tmp/ractor_node_node_$i.log"
+    NAME="${NODE_NAMES[$((i-1))]}"
+    echo "    /tmp/ractor_${NAME}.log"
 done
 echo
 
 if [ "$START_SHELL" = true ]; then
     echo -e "${CYAN}────────────────────────────────────────────────────────────${NC}"
-    echo -e "${CYAN}  Starting Interactive Shell${NC}"
+    echo -e "${CYAN}  ${BOLD}Starting Interactive Shell${NC}"
     echo -e "${CYAN}────────────────────────────────────────────────────────────${NC}"
     echo
     echo "  Quick commands to try:"
     echo
+    echo -e "    ${GREEN}actors${NC}                              # List local actors"
+    echo -e "    ${GREEN}pg members raft_cluster${NC}             # Show Raft cluster members"
+    echo
+    echo "  Connect to a node and query Raft status:"
+    echo
+    echo -e "    ${GREEN}connect 127.0.0.1:$START_PORT${NC}"
+    echo -e "    ${GREEN}call raft_node {\"command\": \"is_leader\"}${NC}"
+    echo -e "    ${GREEN}call raft_node {\"command\": \"get_leader\"}${NC}"
+    echo -e "    ${GREEN}call raft_node {\"command\": \"status\"}${NC}"
+    echo -e "    ${GREEN}call raft_node {\"command\": \"peers\"}${NC}"
+    echo
+    echo "  Check multiple nodes:"
+    echo
     for addr in "${NODE_ADDRS[@]}"; do
         echo -e "    ${GREEN}connect $addr${NC}"
     done
-    echo -e "    ${GREEN}nodes${NC}              # List connected nodes"
-    echo -e "    ${GREEN}use 127.0.0.1:$START_PORT${NC}    # Switch to node context"
-    echo -e "    ${GREEN}registry${NC}           # Show actors on current node"
-    echo -e "    ${GREEN}pg members workers${NC} # Show worker actors"
-    echo -e "    ${GREEN}cluster${NC}            # Show cluster topology"
     echo
     echo -e "${CYAN}────────────────────────────────────────────────────────────${NC}"
     echo
@@ -196,16 +271,16 @@ if [ "$START_SHELL" = true ]; then
     cargo run --example demo -p ractor_shell --quiet
 else
     echo -e "${CYAN}────────────────────────────────────────────────────────────${NC}"
-    echo -e "${CYAN}  Manual Testing Mode${NC}"
+    echo -e "${CYAN}  ${BOLD}Manual Testing Mode${NC}"
     echo -e "${CYAN}────────────────────────────────────────────────────────────${NC}"
     echo
     echo "  Start the shell manually with:"
     echo
     echo -e "    ${GREEN}cargo run --example demo -p ractor_shell${NC}"
     echo
-    echo "  Or use the shell binary directly:"
+    echo "  Or connect directly to a node:"
     echo
-    echo -e "    ${GREEN}cargo run --bin ractor-shell${NC}"
+    echo -e "    ${GREEN}cargo run --example demo -p ractor_shell -- --connect 127.0.0.1:$START_PORT${NC}"
     echo
     echo "  Press Ctrl+C to stop all nodes."
     echo

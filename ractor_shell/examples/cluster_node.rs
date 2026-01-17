@@ -1,177 +1,133 @@
-//! Cluster Node Example for ractor_shell
+//! Raft Cluster Node for ractor_shell
 //!
-//! This example demonstrates setting up a remote node that can be connected to
-//! via ractor_shell. Run this first, then connect to it from another shell instance.
+//! This example demonstrates a cluster node with Raft-based leader election.
+//! Nodes automatically elect a leader and can report their status via shell commands.
 //!
-//! ## Usage
+//! ## Quick Start (3-Node Cluster)
 //!
-//! Terminal 1 - Start the node server:
+//! Use the test script to start a 3-node cluster:
 //! ```bash
-//! cargo run --example cluster_node -- --port 9002 --name node_b
+//! ./ractor_shell/scripts/test_cluster.sh
 //! ```
 //!
-//! Terminal 2 - Connect from shell:
+//! Or manually start nodes:
+//! ```bash
+//! # Terminal 1: Node A (leader candidate)
+//! cargo run --example cluster_node -p ractor_shell -- --name node_a --port 9001
+//!
+//! # Terminal 2: Node B (connects to A)
+//! cargo run --example cluster_node -p ractor_shell -- --name node_b --port 9002 --peer 127.0.0.1:9001
+//!
+//! # Terminal 3: Node C (connects to A, discovers B)
+//! cargo run --example cluster_node -p ractor_shell -- --name node_c --port 9003 --peer 127.0.0.1:9001
+//! ```
+//!
+//! ## Shell Commands
+//!
+//! Query any node's Raft status:
 //! ```bash
 //! cargo run --example demo -p ractor_shell
-//! # Then in the shell:
-//! ractor@local > connect 127.0.0.1:9002
-//! ractor@local > use 127.0.0.1:9002
-//! ractor@127.0.0.1:9002 > registry
-//! ractor@127.0.0.1:9002 > cluster
+//!
+//! # Connect and query
+//! ractor@local > connect 127.0.0.1:9001
+//! ractor@local > call raft_node {"command": "is_leader"}
+//! ractor@local > call raft_node {"command": "get_leader"}
+//! ractor@local > call raft_node {"command": "status"}
+//! ractor@local > call raft_node {"command": "peers"}
 //! ```
 //!
-//! ## What This Demonstrates
+//! ## Architecture
 //!
-//! - Setting up a ractor_cluster NodeServer
-//! - Spawning an IntrospectionActor for shell connectivity
-//! - Creating actors that participate in process groups
-//! - Remote shell introspection
+//! Each node runs:
+//! - `NodeServer`: Handles cluster networking
+//! - `IntrospectionActor`: Enables shell connectivity
+//! - `RaftNode`: Participates in leader election
+//!
+//! Nodes use transitive connection mode, so connecting to one node
+//! automatically discovers and connects to its peers.
 
 use clap::Parser;
 use colored::Colorize;
-use ractor::{Actor, ActorProcessingErr, ActorRef};
+use ractor::Actor;
+use ractor_cluster::node::{client, NodeConnectionMode};
 use ractor_cluster::NodeServer;
-use ractor_shell::dynamic::{CallResponse, DynamicMessage};
 use ractor_shell::introspection::IntrospectionActor;
-use serde_json::json;
+use ractor_shell::raft::{RaftConfig, RaftNode};
 use std::time::Duration;
 use tokio::signal;
 
 /// Command line arguments for the cluster node
 #[derive(Parser, Debug)]
 #[command(name = "cluster_node")]
-#[command(about = "A ractor_cluster node that can be connected to via ractor_shell")]
+#[command(about = "A ractor_cluster node with Raft leader election")]
 struct Args {
     /// Port to listen on
-    #[arg(short, long, default_value = "9002")]
+    #[arg(short, long, default_value = "9001")]
     port: u16,
 
     /// Node name for identification
-    #[arg(short, long, default_value = "node_b")]
+    #[arg(short, long, default_value = "node_a")]
     name: String,
 
     /// Cluster authentication cookie
     #[arg(short, long, default_value = "secret_cookie")]
     cookie: String,
-}
 
-/// Example actor that runs on the remote node
-/// Demonstrates an actor that can receive dynamic messages from the shell
-struct RemoteWorker {
-    name: String,
-}
+    /// Peer node address to connect to (e.g., 127.0.0.1:9001)
+    #[arg(long)]
+    peer: Option<String>,
 
-struct WorkerState {
-    processed_count: u64,
-    status: String,
-}
+    /// Additional peer addresses (can specify multiple)
+    #[arg(long = "peers")]
+    additional_peers: Vec<String>,
 
-impl Actor for RemoteWorker {
-    type Msg = DynamicMessage;
-    type State = WorkerState;
-    type Arguments = ();
+    /// Election timeout minimum in ms
+    #[arg(long, default_value = "150")]
+    election_timeout_min: u64,
 
-    async fn pre_start(
-        &self,
-        myself: ActorRef<Self::Msg>,
-        _: (),
-    ) -> Result<Self::State, ActorProcessingErr> {
-        // Join a process group so we're discoverable
-        ractor::pg::join("workers".to_string(), vec![myself.get_cell()]);
+    /// Election timeout maximum in ms
+    #[arg(long, default_value = "300")]
+    election_timeout_max: u64,
 
-        println!(
-            "  [{}] Worker started and joined 'workers' group",
-            self.name
-        );
-        Ok(WorkerState {
-            processed_count: 0,
-            status: "idle".to_string(),
-        })
-    }
-
-    async fn handle(
-        &self,
-        _myself: ActorRef<Self::Msg>,
-        message: Self::Msg,
-        state: &mut Self::State,
-    ) -> Result<(), ActorProcessingErr> {
-        match message {
-            DynamicMessage::Cast(json) => {
-                state.processed_count += 1;
-                println!(
-                    "  [{}] Received cast #{}: {}",
-                    self.name, state.processed_count, json
-                );
-
-                if let Some(status) = json.get("status").and_then(|v| v.as_str()) {
-                    state.status = status.to_string();
-                    println!("  [{}] Status changed to: {}", self.name, status);
-                }
-            }
-            DynamicMessage::Call(json, reply) => {
-                state.processed_count += 1;
-                println!(
-                    "  [{}] Received call #{}: {}",
-                    self.name, state.processed_count, json
-                );
-
-                if let Some(cmd) = json.get("command").and_then(|v| v.as_str()) {
-                    match cmd {
-                        "status" => {
-                            let response = json!({
-                                "name": self.name,
-                                "processed": state.processed_count,
-                                "status": state.status
-                            });
-                            let _ = reply.send(CallResponse::Success(response));
-                        }
-                        "work" => {
-                            // Simulate some work
-                            tokio::time::sleep(Duration::from_millis(100)).await;
-                            let response = json!({
-                                "result": "work completed",
-                                "total_processed": state.processed_count
-                            });
-                            let _ = reply.send(CallResponse::Success(response));
-                        }
-                        _ => {
-                            let _ = reply
-                                .send(CallResponse::Error(format!("Unknown command: {}", cmd)));
-                        }
-                    }
-                } else {
-                    let _ = reply.send(CallResponse::Error("Missing 'command' field".to_string()));
-                }
-            }
-            DynamicMessage::Ping(reply) => {
-                let _ = reply.send(true);
-            }
-        }
-        Ok(())
-    }
+    /// Heartbeat interval in ms
+    #[arg(long, default_value = "50")]
+    heartbeat_interval: u64,
 }
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // Initialize tracing for Raft debug output
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::from_default_env()
+                .add_directive("ractor_shell::raft=info".parse().unwrap()),
+        )
+        .init();
+
     let args = Args::parse();
 
     println!("{}", "═".repeat(60).bright_black());
     println!(
         "{}",
-        format!("  Ractor Cluster Node: {}", args.name)
+        format!("  Raft Cluster Node: {}", args.name)
             .bright_cyan()
             .bold()
     );
     println!("{}", "═".repeat(60).bright_black());
     println!();
 
-    // Start the NodeServer
-    println!("Starting NodeServer on port {}...", args.port);
-
+    // Get hostname for identification
     let hostname = hostname::get()
         .ok()
         .and_then(|h| h.into_string().ok())
         .unwrap_or_else(|| "localhost".to_string());
+
+    // Start the NodeServer with transitive connection mode
+    // This allows nodes to discover each other automatically
+    println!(
+        "Starting NodeServer on port {} (transitive mode)...",
+        args.port
+    );
 
     let node_server_actor = NodeServer::new(
         args.port,
@@ -179,7 +135,7 @@ async fn main() -> anyhow::Result<()> {
         args.name.clone(),
         hostname,
         None, // encryption_mode
-        None, // connection_mode
+        Some(NodeConnectionMode::Transitive),
     );
 
     let (node_server, _handle) =
@@ -194,52 +150,140 @@ async fn main() -> anyhow::Result<()> {
     // Start the IntrospectionActor so shells can connect
     println!("Starting IntrospectionActor...");
 
-    let (introspection_ref, _) = Actor::spawn(
+    let (_introspection_ref, _) = Actor::spawn(
         Some("introspection".to_string()),
         IntrospectionActor,
         args.name.clone(),
     )
     .await?;
 
+    println!("{} IntrospectionActor ready", "✓".green());
+
+    // Start the Raft node for leader election
+    println!("Starting RaftNode...");
+
+    let raft_config = RaftConfig {
+        node_name: args.name.clone(),
+        election_timeout_min_ms: args.election_timeout_min,
+        election_timeout_max_ms: args.election_timeout_max,
+        heartbeat_interval_ms: args.heartbeat_interval,
+    };
+
+    let (_raft_ref, _) = Actor::spawn(Some("raft_node".to_string()), RaftNode, raft_config).await?;
+
     println!(
-        "{} IntrospectionActor ready (joined 'ractor_shell_introspection' group)",
+        "{} RaftNode ready (joined 'raft_cluster' group)",
         "✓".green()
     );
+    println!();
 
-    // Spawn some worker actors
-    println!("Spawning worker actors...");
+    // Connect to peer nodes if specified
+    let mut peers_to_connect = Vec::new();
+    if let Some(peer) = &args.peer {
+        peers_to_connect.push(peer.clone());
+    }
+    peers_to_connect.extend(args.additional_peers.clone());
 
-    for i in 1..=3 {
-        let name = format!("worker_{}", i);
-        let worker = RemoteWorker { name: name.clone() };
-        let (_ref, _handle) = Actor::spawn(Some(name.clone()), worker, ()).await?;
+    if !peers_to_connect.is_empty() {
+        println!("Connecting to peer nodes...");
+        // Give our server a moment to fully start
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        for peer_addr in &peers_to_connect {
+            println!("  Connecting to {}...", peer_addr.cyan());
+            match client::connect(&node_server, peer_addr.as_str()).await {
+                Ok(()) => println!("    {} Connected to {}", "✓".green(), peer_addr),
+                Err(e) => println!(
+                    "    {} Failed to connect to {}: {:?}",
+                    "✗".red(),
+                    peer_addr,
+                    e
+                ),
+            }
+        }
+        println!();
     }
 
-    println!("{} 3 worker actors spawned", "✓".green());
+    // Print status and instructions
+    print_instructions(&args);
+
+    // Wait for shutdown signal
+    signal::ctrl_c().await?;
+
+    println!();
+    println!("Shutting down...");
+
+    // Stop actors gracefully - node_server will clean up children
+    node_server.stop(Some("Shutdown".to_string()));
+
+    // Give actors time to clean up
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    println!("{} Node stopped.", "✓".green());
+    Ok(())
+}
+
+fn print_instructions(args: &Args) {
+    println!("{}", "─".repeat(60).bright_black());
+    println!("{}", "  Raft Cluster Status".bold());
+    println!("{}", "─".repeat(60).bright_black());
+    println!();
+    println!("  Node: {}", args.name.cyan());
+    println!("  Port: {}", args.port.to_string().cyan());
+    println!(
+        "  Cookie: {}",
+        args.cookie.chars().take(4).collect::<String>() + "..."
+    );
     println!();
 
-    // Print connection instructions
     println!("{}", "─".repeat(60).bright_black());
-    println!("{}", "  Connection Instructions".bold());
+    println!("{}", "  Shell Commands".bold());
     println!("{}", "─".repeat(60).bright_black());
     println!();
-    println!("  From another terminal, run:");
+    println!("  From another terminal:");
     println!();
     println!(
         "    {}",
         "cargo run --example demo -p ractor_shell".bright_white()
     );
     println!();
-    println!("  Then in the shell:");
+    println!("  Then query this node:");
     println!();
     println!("    {}", format!("connect 127.0.0.1:{}", args.port).green());
-    println!("    {}", format!("use 127.0.0.1:{}", args.port).green());
-    println!("    {}", "registry".green());
-    println!("    {}", "actors".green());
-    println!("    {}", "pg members workers".green());
-    println!("    {}", r#"call worker_1 {"command": "status"}"#.green());
-    println!("    {}", "cluster".green());
+    println!(
+        "    {}",
+        r#"call raft_node {"command": "is_leader"}"#.green()
+    );
+    println!(
+        "    {}",
+        r#"call raft_node {"command": "get_leader"}"#.green()
+    );
+    println!("    {}", r#"call raft_node {"command": "status"}"#.green());
+    println!("    {}", r#"call raft_node {"command": "peers"}"#.green());
     println!();
+
+    println!("{}", "─".repeat(60).bright_black());
+    println!("{}", "  Raft Commands Reference".bold());
+    println!("{}", "─".repeat(60).bright_black());
+    println!();
+    println!(
+        "  {} - Check if this node is leader",
+        r#"{"command": "is_leader"}"#.yellow()
+    );
+    println!(
+        "  {} - Get current leader name",
+        r#"{"command": "get_leader"}"#.yellow()
+    );
+    println!(
+        "  {} - Full status (role, term, peers)",
+        r#"{"command": "status"}"#.yellow()
+    );
+    println!(
+        "  {} - List connected peers",
+        r#"{"command": "peers"}"#.yellow()
+    );
+    println!();
+
     println!("{}", "─".repeat(60).bright_black());
     println!();
     println!(
@@ -248,20 +292,4 @@ async fn main() -> anyhow::Result<()> {
         "Ctrl+C".yellow()
     );
     println!();
-
-    // Wait for shutdown signal
-    signal::ctrl_c().await?;
-
-    println!();
-    println!("Shutting down...");
-
-    // Stop actors gracefully
-    introspection_ref.stop(Some("Shutdown".to_string()));
-    node_server.stop(Some("Shutdown".to_string()));
-
-    // Give actors time to clean up
-    tokio::time::sleep(Duration::from_millis(500)).await;
-
-    println!("{} Node stopped.", "✓".green());
-    Ok(())
 }
