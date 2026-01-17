@@ -60,29 +60,4 @@ pub mod patterns {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_parse_json_object() {
-        let input = r#"{"Ping": ["node_a", 5]}"#;
-        let result = parse_json_input(input);
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn test_parse_json_string() {
-        let input = r#""hello""#;
-        let result = parse_json_input(input);
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn test_enum_message() {
-        let msg = patterns::enum_message(
-            "Ping",
-            vec![Value::String("node_a".to_string()), Value::Number(5.into())],
-        );
-        assert!(msg.is_object());
-    }
-}
+mod messages_tests;

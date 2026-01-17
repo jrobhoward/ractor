@@ -335,35 +335,4 @@ pub fn get_known_process_groups() -> Vec<String> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_command_completion() {
-        let helper = ShellHelper::new();
-        let (pos, candidates) = helper
-            .complete(
-                "he",
-                2,
-                &Context::new(&rustyline::history::DefaultHistory::new()),
-            )
-            .unwrap();
-
-        assert_eq!(pos, 0);
-        assert!(candidates.iter().any(|c| c.display == "help"));
-    }
-
-    #[test]
-    fn test_pg_subcommand_completion() {
-        let helper = ShellHelper::new();
-        let (_pos, candidates) = helper
-            .complete(
-                "pg m",
-                4,
-                &Context::new(&rustyline::history::DefaultHistory::new()),
-            )
-            .unwrap();
-
-        assert!(candidates.iter().any(|c| c.display == "members"));
-    }
-}
+mod completer_tests;

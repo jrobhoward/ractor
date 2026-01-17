@@ -311,19 +311,4 @@ pub fn is_monitoring_supported() -> bool {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_event_formatting() {
-        let event = MonitorEvent::ActorStarted {
-            actor_id: "1.0".to_string(),
-            actor_name: Some("test_actor".to_string()),
-            timestamp: Local::now(),
-        };
-
-        let formatted = event.format();
-        assert!(formatted.contains("STARTED"));
-        assert!(formatted.contains("test_actor"));
-    }
-}
+mod monitor_tests;

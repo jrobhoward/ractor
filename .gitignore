@@ -17,3 +17,4 @@ debug/
 coverage/
 **/*.profraw
 **/.DS_Store
+.idea/

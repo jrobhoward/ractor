@@ -49,19 +49,37 @@
 //! - [`protocol`]: Shell protocol messages for cluster communication
 //! - [`completer`]: Tab completion support
 
-use anyhow::{anyhow, Result};
 use colored::Colorize;
 use ractor::{rpc::CallResult, Actor, ActorRef};
 use std::collections::HashMap;
+use std::time::Duration;
 use tabled::{Table, Tabled};
 
 pub mod commands;
 pub mod completer;
 pub mod dynamic;
+pub mod error;
 pub mod introspection;
 pub mod messages;
 pub mod monitor;
 pub mod protocol;
+
+pub use error::{ShellError, ShellResult};
+
+// ==================== Constants ====================
+
+/// Default timeout for RPC calls.
+pub const DEFAULT_RPC_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Default port for the local NodeServer when connecting to remote nodes.
+pub const DEFAULT_NODE_SERVER_PORT: u16 = 9100;
+
+/// Default cookie for cluster authentication.
+pub const DEFAULT_CLUSTER_COOKIE: &str = "secret_cookie";
+
+/// Known process groups for local enumeration (ractor 0.15 doesn't expose group listing).
+pub const KNOWN_PROCESS_GROUPS: &[&str] =
+    &["ping_pong", "ractor_shell_introspection", "demo_group"];
 
 use introspection::INTROSPECTION_GROUP;
 use protocol::{ClusterTopology, ShellProtocolMessage};
@@ -89,7 +107,7 @@ impl ShellState {
     ///
     /// This spawns the monitor actor and initializes the local node name
     /// based on the system hostname.
-    pub async fn new() -> Result<Self> {
+    pub async fn new() -> ShellResult<Self> {
         let local_node_name = format!(
             "shell@{}",
             hostname::get()
@@ -132,7 +150,7 @@ impl ShellState {
     /// Execute a shell command.
     ///
     /// This is the main dispatch method that routes commands to their handlers.
-    pub async fn execute(&mut self, cmd: ShellCommand) -> Result<()> {
+    pub async fn execute(&mut self, cmd: ShellCommand) -> ShellResult<()> {
         match cmd {
             ShellCommand::Help { command } => self.cmd_help(command).await,
             ShellCommand::Exit => self.cmd_exit().await,
@@ -161,7 +179,7 @@ impl ShellState {
         }
     }
 
-    async fn cmd_help(&self, command: Option<String>) -> Result<()> {
+    async fn cmd_help(&self, command: Option<String>) -> ShellResult<()> {
         if let Some(cmd) = command {
             // Show detailed help for specific command
             match cmd.as_str() {
@@ -339,12 +357,12 @@ impl ShellState {
         Ok(())
     }
 
-    async fn cmd_exit(&mut self) -> Result<()> {
+    async fn cmd_exit(&mut self) -> ShellResult<()> {
         self.should_exit = true;
         Ok(())
     }
 
-    async fn cmd_actors(&self) -> Result<()> {
+    async fn cmd_actors(&self) -> ShellResult<()> {
         #[derive(Tabled)]
         struct ActorRow {
             #[tabled(rename = "Name")]
@@ -361,9 +379,10 @@ impl ShellState {
                 let result = introspection_ref
                     .call(
                         ShellProtocolMessage::ListRegisteredActors,
-                        Some(tokio::time::Duration::from_secs(5)),
+                        Some(DEFAULT_RPC_TIMEOUT),
                     )
-                    .await?;
+                    .await
+                    .map_err(ShellError::messaging)?;
 
                 match result {
                     CallResult::Success(actors) => {
@@ -384,11 +403,11 @@ impl ShellState {
                         let table = Table::new(rows).to_string();
                         println!("{}", table);
                     }
-                    CallResult::Timeout => return Err(anyhow!("Request timeout")),
-                    CallResult::SenderError => return Err(anyhow!("Request sender error")),
+                    CallResult::Timeout => return Err(ShellError::rpc_timeout()),
+                    CallResult::SenderError => return Err(ShellError::RpcSenderError),
                 }
             } else {
-                return Err(anyhow!("Not connected to node '{}'", node_name));
+                return Err(ShellError::NodeNotConnected(node_name.clone()));
             }
         } else {
             // Local query
@@ -420,16 +439,17 @@ impl ShellState {
         Ok(())
     }
 
-    async fn cmd_registry(&self) -> Result<()> {
+    async fn cmd_registry(&self) -> ShellResult<()> {
         // Check if we're working with a remote node
         if let Some(node_name) = &self.current_node {
             if let Some(introspection_ref) = self.connected_nodes.get(node_name) {
                 let result = introspection_ref
                     .call(
                         ShellProtocolMessage::ListRegisteredActors,
-                        Some(tokio::time::Duration::from_secs(5)),
+                        Some(DEFAULT_RPC_TIMEOUT),
                     )
-                    .await?;
+                    .await
+                    .map_err(ShellError::messaging)?;
 
                 match result {
                     CallResult::Success(actors) => {
@@ -452,11 +472,11 @@ impl ShellState {
                             );
                         }
                     }
-                    CallResult::Timeout => return Err(anyhow!("Request timeout")),
-                    CallResult::SenderError => return Err(anyhow!("Request sender error")),
+                    CallResult::Timeout => return Err(ShellError::rpc_timeout()),
+                    CallResult::SenderError => return Err(ShellError::RpcSenderError),
                 }
             } else {
-                return Err(anyhow!("Not connected to node '{}'", node_name));
+                return Err(ShellError::NodeNotConnected(node_name.clone()));
             }
         } else {
             // Local registry query
@@ -486,7 +506,7 @@ impl ShellState {
         Ok(())
     }
 
-    async fn cmd_pg_list(&self) -> Result<()> {
+    async fn cmd_pg_list(&self) -> ShellResult<()> {
         println!("{}", "Process Groups:".bold());
         println!("Note: Process group enumeration not available in ractor 0.15");
         println!("You can query specific groups with: pg members <group_name>");
@@ -497,7 +517,7 @@ impl ShellState {
         Ok(())
     }
 
-    async fn cmd_pg_members(&self, group: String) -> Result<()> {
+    async fn cmd_pg_members(&self, group: String) -> ShellResult<()> {
         #[derive(Tabled)]
         struct MemberRow {
             #[tabled(rename = "Actor ID")]
@@ -514,9 +534,10 @@ impl ShellState {
                 let result = introspection_ref
                     .call(
                         |reply| ShellProtocolMessage::GetProcessGroupMembers(group.clone(), reply),
-                        Some(tokio::time::Duration::from_secs(5)),
+                        Some(DEFAULT_RPC_TIMEOUT),
                     )
-                    .await?;
+                    .await
+                    .map_err(ShellError::messaging)?;
 
                 match result {
                     CallResult::Success(actors) => {
@@ -552,11 +573,11 @@ impl ShellState {
                         let table = Table::new(rows).to_string();
                         println!("{}", table);
                     }
-                    CallResult::Timeout => return Err(anyhow!("Request timeout")),
-                    CallResult::SenderError => return Err(anyhow!("Request sender error")),
+                    CallResult::Timeout => return Err(ShellError::rpc_timeout()),
+                    CallResult::SenderError => return Err(ShellError::RpcSenderError),
                 }
             } else {
-                return Err(anyhow!("Not connected to node '{}'", node_name));
+                return Err(ShellError::NodeNotConnected(node_name.clone()));
             }
         } else {
             // Local query
@@ -595,16 +616,17 @@ impl ShellState {
         Ok(())
     }
 
-    async fn cmd_info(&self, actor: String) -> Result<()> {
+    async fn cmd_info(&self, actor: String) -> ShellResult<()> {
         // Check if we're working with a remote node
         if let Some(node_name) = &self.current_node {
             if let Some(introspection_ref) = self.connected_nodes.get(node_name) {
                 let result = introspection_ref
                     .call(
                         |reply| ShellProtocolMessage::GetActorInfo(actor.clone(), reply),
-                        Some(tokio::time::Duration::from_secs(5)),
+                        Some(DEFAULT_RPC_TIMEOUT),
                     )
-                    .await?;
+                    .await
+                    .map_err(ShellError::messaging)?;
 
                 match result {
                     CallResult::Success(Some(actor_info)) => {
@@ -620,16 +642,15 @@ impl ShellState {
                         );
                         Ok(())
                     }
-                    CallResult::Success(None) => Err(anyhow!(
-                        "Actor '{}' not found on node '{}'",
-                        actor,
-                        node_name
-                    )),
-                    CallResult::Timeout => Err(anyhow!("Request timeout")),
-                    CallResult::SenderError => Err(anyhow!("Request sender error")),
+                    CallResult::Success(None) => Err(ShellError::RemoteActorNotFound {
+                        actor: actor.clone(),
+                        node: node_name.clone(),
+                    }),
+                    CallResult::Timeout => Err(ShellError::rpc_timeout()),
+                    CallResult::SenderError => Err(ShellError::RpcSenderError),
                 }
             } else {
-                Err(anyhow!("Not connected to node '{}'", node_name))
+                Err(ShellError::NodeNotConnected(node_name.clone()))
             }
         } else {
             // Local query
@@ -642,12 +663,12 @@ impl ShellState {
                 }
                 Ok(())
             } else {
-                Err(anyhow!("Actor '{}' not found in registry", actor))
+                Err(ShellError::ActorNotFound(actor))
             }
         }
     }
 
-    async fn cmd_send(&self, actor: String, message: String) -> Result<()> {
+    async fn cmd_send(&self, actor: String, message: String) -> ShellResult<()> {
         println!("send {} <- {}", actor.green(), message.bright_black());
         println!();
 
@@ -690,7 +711,9 @@ impl ShellState {
                 // Actor supports dynamic messages - actually send!
                 println!("{} Actor supports dynamic messages", "✓".green());
 
-                dynamic_ref.cast(crate::dynamic::DynamicMessage::Cast(json_value.clone()))?;
+                dynamic_ref
+                    .cast(crate::dynamic::DynamicMessage::Cast(json_value.clone()))
+                    .map_err(ShellError::messaging)?;
 
                 println!("{} Message sent to {}", "✓".green().bold(), actor.green());
                 println!();
@@ -755,7 +778,7 @@ impl ShellState {
         Ok(())
     }
 
-    async fn cmd_call(&self, actor: String, message: String) -> Result<()> {
+    async fn cmd_call(&self, actor: String, message: String) -> ShellResult<()> {
         println!("call {} <- {}", actor.green(), message.bright_black());
         println!();
 
@@ -803,7 +826,7 @@ impl ShellState {
                 let result = dynamic_ref
                     .call(
                         |reply| crate::dynamic::DynamicMessage::Call(json_value.clone(), reply),
-                        Some(tokio::time::Duration::from_secs(5)),
+                        Some(DEFAULT_RPC_TIMEOUT),
                     )
                     .await;
 
@@ -886,7 +909,7 @@ impl ShellState {
         Ok(())
     }
 
-    async fn cmd_send_file(&self, actor: String, file_path: String) -> Result<()> {
+    async fn cmd_send_file(&self, actor: String, file_path: String) -> ShellResult<()> {
         println!(
             "send-file {} <- {}",
             actor.green(),
@@ -915,7 +938,7 @@ impl ShellState {
         self.cmd_send(actor, content).await
     }
 
-    async fn cmd_load(&mut self, script_path: String) -> Result<()> {
+    async fn cmd_load(&mut self, script_path: String) -> ShellResult<()> {
         println!("load {}", script_path.bright_black());
         println!();
 
@@ -980,29 +1003,26 @@ impl ShellState {
         Ok(())
     }
 
-    async fn cmd_stop(&self, actor: String) -> Result<()> {
+    async fn cmd_stop(&self, actor: String) -> ShellResult<()> {
         if let Some(cell) = ractor::registry::where_is(actor.clone()) {
             cell.stop(Some("Stopped by shell".to_string()));
             println!("{} Sent stop signal to '{}'", "✓".green(), actor);
             Ok(())
         } else {
-            Err(anyhow!("Actor '{}' not found in registry", actor))
+            Err(ShellError::ActorNotFound(actor))
         }
     }
 
-    async fn cmd_connect(&mut self, host: String) -> Result<()> {
+    async fn cmd_connect(&mut self, host: String) -> ShellResult<()> {
         println!("{} {}", "Connecting to".bright_black(), host.green());
 
         // Spawn NodeServer if not already running
         if self.node_server.is_none() {
             println!("  Starting local NodeServer...");
 
-            const DEFAULT_PORT: u16 = 9100;
-            const COOKIE: &str = "secret_cookie";
-
             let node_server = ractor_cluster::NodeServer::new(
-                DEFAULT_PORT,
-                COOKIE.to_string(),
+                DEFAULT_NODE_SERVER_PORT,
+                DEFAULT_CLUSTER_COOKIE.to_string(),
                 format!("{}_instance", self.local_node_name),
                 self.local_node_name.clone(),
                 None, // no encryption
@@ -1015,13 +1035,15 @@ impl ShellState {
             println!(
                 "  {} NodeServer started on port {}",
                 "✓".green(),
-                DEFAULT_PORT
+                DEFAULT_NODE_SERVER_PORT
             );
         }
 
         // Connect to the remote node
         if let Some(ref node_ref) = self.node_server {
-            ractor_cluster::client_connect(node_ref, &host).await?;
+            ractor_cluster::client_connect(node_ref, &host)
+                .await
+                .map_err(|e| ShellError::ClusterError(format!("{:?}", e)))?;
             println!("  {} Connected to {}", "✓".green(), host);
 
             // Wait a bit for connection to establish
@@ -1038,10 +1060,7 @@ impl ShellState {
                 .collect();
 
             if remote_introspection.is_empty() {
-                return Err(anyhow!(
-                    "No introspection actor found on remote node. \
-                     Make sure the target node has spawned an IntrospectionActor."
-                ));
+                return Err(ShellError::NoIntrospectionActor);
             }
 
             // For now, take the first remote introspection actor
@@ -1050,21 +1069,19 @@ impl ShellState {
 
             // Test with a ping
             let pong_result = introspection_ref
-                .call(
-                    ShellProtocolMessage::Ping,
-                    Some(tokio::time::Duration::from_secs(5)),
-                )
-                .await?;
+                .call(ShellProtocolMessage::Ping, Some(DEFAULT_RPC_TIMEOUT))
+                .await
+                .map_err(ShellError::messaging)?;
 
             match pong_result {
                 CallResult::Success(pong) => {
                     println!("  {} {}", "✓".green(), pong.bright_black());
                 }
                 CallResult::Timeout => {
-                    return Err(anyhow!("Ping timeout"));
+                    return Err(ShellError::rpc_timeout());
                 }
                 CallResult::SenderError => {
-                    return Err(anyhow!("Ping sender error"));
+                    return Err(ShellError::RpcSenderError);
                 }
             }
 
@@ -1083,9 +1100,10 @@ impl ShellState {
             let topo_result = introspection_ref
                 .call(
                     ShellProtocolMessage::GetClusterTopology,
-                    Some(tokio::time::Duration::from_secs(5)),
+                    Some(DEFAULT_RPC_TIMEOUT),
                 )
-                .await?;
+                .await
+                .map_err(ShellError::messaging)?;
 
             match topo_result {
                 CallResult::Success(topology) => {
@@ -1111,16 +1129,16 @@ impl ShellState {
         Ok(())
     }
 
-    async fn cmd_disconnect(&mut self, node: String) -> Result<()> {
+    async fn cmd_disconnect(&mut self, node: String) -> ShellResult<()> {
         if self.connected_nodes.remove(&node).is_some() {
             println!("{} Disconnected from {}", "✓".green(), node);
             Ok(())
         } else {
-            Err(anyhow!("Not connected to node '{}'", node))
+            Err(ShellError::NodeNotConnected(node))
         }
     }
 
-    async fn cmd_nodes(&self) -> Result<()> {
+    async fn cmd_nodes(&self) -> ShellResult<()> {
         if self.connected_nodes.is_empty() {
             println!("No connected nodes");
             println!(
@@ -1150,7 +1168,7 @@ impl ShellState {
         Ok(())
     }
 
-    async fn cmd_use(&mut self, node: String) -> Result<()> {
+    async fn cmd_use(&mut self, node: String) -> ShellResult<()> {
         if node == "local" {
             self.current_node = None;
             println!("{} Switched to local node", "✓".green());
@@ -1162,14 +1180,11 @@ impl ShellState {
             println!("{} Switched to node {}", "✓".green(), node.green());
             Ok(())
         } else {
-            Err(anyhow!(
-                "Not connected to node '{}'. Use 'nodes' to see connected nodes.",
-                node
-            ))
+            Err(ShellError::NodeNotConnected(node))
         }
     }
 
-    async fn cmd_cluster(&mut self, subcommand: Option<String>) -> Result<()> {
+    async fn cmd_cluster(&mut self, subcommand: Option<String>) -> ShellResult<()> {
         // We need to be connected to at least one node to query cluster topology
         if self.connected_nodes.is_empty() {
             println!(
@@ -1186,17 +1201,18 @@ impl ShellState {
         let result = introspection_ref
             .call(
                 ShellProtocolMessage::GetClusterTopology,
-                Some(tokio::time::Duration::from_secs(5)),
+                Some(DEFAULT_RPC_TIMEOUT),
             )
-            .await?;
+            .await
+            .map_err(ShellError::messaging)?;
 
         let topology = match result {
             CallResult::Success(topo) => {
                 self.cluster_topology = Some(topo.clone());
                 topo
             }
-            CallResult::Timeout => return Err(anyhow!("Topology query timeout")),
-            CallResult::SenderError => return Err(anyhow!("Topology query sender error")),
+            CallResult::Timeout => return Err(ShellError::rpc_timeout()),
+            CallResult::SenderError => return Err(ShellError::RpcSenderError),
         };
 
         // Handle subcommands
@@ -1343,7 +1359,7 @@ impl ShellState {
         Ok(())
     }
 
-    async fn cmd_stats(&self) -> Result<()> {
+    async fn cmd_stats(&self) -> ShellResult<()> {
         println!();
         println!("{}", "System Statistics".bold().underline());
         println!();
@@ -1358,9 +1374,10 @@ impl ShellState {
                 let result = introspection_ref
                     .call(
                         ShellProtocolMessage::ListRegisteredActors,
-                        Some(tokio::time::Duration::from_secs(5)),
+                        Some(DEFAULT_RPC_TIMEOUT),
                     )
-                    .await?;
+                    .await
+                    .map_err(ShellError::messaging)?;
 
                 match result {
                     CallResult::Success(actors) => {
@@ -1377,7 +1394,11 @@ impl ShellState {
                             println!("    {} {}", status.bright_black(), count);
                         }
                     }
-                    _ => return Err(anyhow!("Failed to fetch stats from remote node")),
+                    _ => {
+                        return Err(ShellError::RemoteOperationFailed(
+                            "Failed to fetch stats".to_string(),
+                        ))
+                    }
                 }
 
                 println!();
@@ -1403,7 +1424,7 @@ impl ShellState {
                     );
                 }
             } else {
-                return Err(anyhow!("Not connected to node '{}'", node_name));
+                return Err(ShellError::NodeNotConnected(node_name.clone()));
             }
         } else {
             // Local stats
@@ -1429,7 +1450,7 @@ impl ShellState {
             println!();
 
             // Process groups
-            let known_groups = vec!["ping_pong", "ractor_shell_introspection", "demo_group"];
+            let known_groups = KNOWN_PROCESS_GROUPS;
             let mut group_count = 0;
             let mut total_members = 0;
 
@@ -1469,7 +1490,7 @@ impl ShellState {
         Ok(())
     }
 
-    async fn cmd_tree(&self, _actor: Option<String>) -> Result<()> {
+    async fn cmd_tree(&self, _actor: Option<String>) -> ShellResult<()> {
         println!();
         println!("{}", "Process Group Tree".bold().underline());
         println!();
@@ -1489,7 +1510,7 @@ impl ShellState {
 
         if self.connected_nodes.is_empty() {
             // Local tree
-            let known_groups = vec!["ping_pong", "ractor_shell_introspection", "demo_group"];
+            let known_groups = KNOWN_PROCESS_GROUPS;
 
             for group in known_groups {
                 let members = ractor::pg::get_members(&group.to_string());
@@ -1555,25 +1576,29 @@ impl ShellState {
         Ok(())
     }
 
-    async fn cmd_monitor(&self, actor: String) -> Result<()> {
+    async fn cmd_monitor(&self, actor: String) -> ShellResult<()> {
         if let Some(monitor_ref) = &self.monitor_actor {
-            monitor_ref.cast(monitor::MonitorMessage::Monitor { actor_name: actor })?;
+            monitor_ref
+                .cast(monitor::MonitorMessage::Monitor { actor_name: actor })
+                .map_err(ShellError::messaging)?;
         } else {
             println!("{} Monitor system not available", "✗".red());
         }
         Ok(())
     }
 
-    async fn cmd_unmonitor(&self, actor: String) -> Result<()> {
+    async fn cmd_unmonitor(&self, actor: String) -> ShellResult<()> {
         if let Some(monitor_ref) = &self.monitor_actor {
-            monitor_ref.cast(monitor::MonitorMessage::Unmonitor { actor_name: actor })?;
+            monitor_ref
+                .cast(monitor::MonitorMessage::Unmonitor { actor_name: actor })
+                .map_err(ShellError::messaging)?;
         } else {
             println!("{} Monitor system not available", "✗".red());
         }
         Ok(())
     }
 
-    async fn cmd_monitors(&self) -> Result<()> {
+    async fn cmd_monitors(&self) -> ShellResult<()> {
         if let Some(monitor_ref) = &self.monitor_actor {
             match ractor::call!(monitor_ref, monitor::MonitorMessage::GetMonitored) {
                 Ok(monitored) => {
@@ -1669,11 +1694,11 @@ impl ShellCommand {
     ///
     /// Supports command aliases (e.g., `a` for `actors`, `q` for `quit`).
     /// Returns an error if the command is not recognized or missing required arguments.
-    pub fn parse_line(line: &str) -> Result<Self> {
+    pub fn parse_line(line: &str) -> ShellResult<Self> {
         let mut parts: Vec<&str> = line.split_whitespace().collect();
 
         if parts.is_empty() {
-            return Err(anyhow!("Empty command"));
+            return Err(ShellError::EmptyCommand);
         }
 
         // Resolve aliases
@@ -1689,24 +1714,36 @@ impl ShellCommand {
             "registry" => Ok(ShellCommand::Registry),
             "pg" => {
                 if parts.len() < 2 {
-                    return Err(anyhow!("pg requires a subcommand: list, members"));
+                    return Err(ShellError::MissingArgument {
+                        command: "pg",
+                        requirement: "a subcommand: list, members",
+                    });
                 }
                 match parts[1] {
                     "list" => Ok(ShellCommand::PgList),
                     "members" => {
                         if parts.len() < 3 {
-                            return Err(anyhow!("pg members requires a group name"));
+                            return Err(ShellError::MissingArgument {
+                                command: "pg members",
+                                requirement: "a group name",
+                            });
                         }
                         Ok(ShellCommand::PgMembers {
                             group: parts[2].to_string(),
                         })
                     }
-                    _ => Err(anyhow!("Unknown pg subcommand: {}", parts[1])),
+                    _ => Err(ShellError::UnknownSubcommand {
+                        parent: "pg",
+                        subcommand: parts[1].to_string(),
+                    }),
                 }
             }
             "info" => {
                 if parts.len() < 2 {
-                    return Err(anyhow!("info requires an actor name"));
+                    return Err(ShellError::MissingArgument {
+                        command: "info",
+                        requirement: "an actor name",
+                    });
                 }
                 Ok(ShellCommand::Info {
                     actor: parts[1].to_string(),
@@ -1714,7 +1751,10 @@ impl ShellCommand {
             }
             "send" => {
                 if parts.len() < 3 {
-                    return Err(anyhow!("send requires: send <actor> <message>"));
+                    return Err(ShellError::MissingArgument {
+                        command: "send",
+                        requirement: "<actor> <message>",
+                    });
                 }
                 Ok(ShellCommand::Send {
                     actor: parts[1].to_string(),
@@ -1723,7 +1763,10 @@ impl ShellCommand {
             }
             "call" => {
                 if parts.len() < 3 {
-                    return Err(anyhow!("call requires: call <actor> <message>"));
+                    return Err(ShellError::MissingArgument {
+                        command: "call",
+                        requirement: "<actor> <message>",
+                    });
                 }
                 Ok(ShellCommand::Call {
                     actor: parts[1].to_string(),
@@ -1732,7 +1775,10 @@ impl ShellCommand {
             }
             "stop" => {
                 if parts.len() < 2 {
-                    return Err(anyhow!("stop requires an actor name"));
+                    return Err(ShellError::MissingArgument {
+                        command: "stop",
+                        requirement: "an actor name",
+                    });
                 }
                 Ok(ShellCommand::Stop {
                     actor: parts[1].to_string(),
@@ -1740,7 +1786,10 @@ impl ShellCommand {
             }
             "connect" => {
                 if parts.len() < 2 {
-                    return Err(anyhow!("connect requires: connect <host:port>"));
+                    return Err(ShellError::MissingArgument {
+                        command: "connect",
+                        requirement: "<host:port>",
+                    });
                 }
                 Ok(ShellCommand::Connect {
                     host: parts[1].to_string(),
@@ -1748,7 +1797,10 @@ impl ShellCommand {
             }
             "disconnect" => {
                 if parts.len() < 2 {
-                    return Err(anyhow!("disconnect requires: disconnect <node_name>"));
+                    return Err(ShellError::MissingArgument {
+                        command: "disconnect",
+                        requirement: "<node_name>",
+                    });
                 }
                 Ok(ShellCommand::Disconnect {
                     node: parts[1].to_string(),
@@ -1757,7 +1809,10 @@ impl ShellCommand {
             "nodes" => Ok(ShellCommand::Nodes),
             "use" => {
                 if parts.len() < 2 {
-                    return Err(anyhow!("use requires: use <node_name> (or 'local')"));
+                    return Err(ShellError::MissingArgument {
+                        command: "use",
+                        requirement: "<node_name> (or 'local')",
+                    });
                 }
                 Ok(ShellCommand::Use {
                     node: parts[1].to_string(),
@@ -1772,7 +1827,10 @@ impl ShellCommand {
             }),
             "send-file" | "sendfile" => {
                 if parts.len() < 3 {
-                    return Err(anyhow!("send-file requires: send-file <actor> <file_path>"));
+                    return Err(ShellError::MissingArgument {
+                        command: "send-file",
+                        requirement: "<actor> <file_path>",
+                    });
                 }
                 Ok(ShellCommand::SendFile {
                     actor: parts[1].to_string(),
@@ -1781,7 +1839,10 @@ impl ShellCommand {
             }
             "load" => {
                 if parts.len() < 2 {
-                    return Err(anyhow!("load requires: load <script_path>"));
+                    return Err(ShellError::MissingArgument {
+                        command: "load",
+                        requirement: "<script_path>",
+                    });
                 }
                 Ok(ShellCommand::Load {
                     script_path: parts[1].to_string(),
@@ -1789,7 +1850,10 @@ impl ShellCommand {
             }
             "monitor" => {
                 if parts.len() < 2 {
-                    return Err(anyhow!("monitor requires an actor name"));
+                    return Err(ShellError::MissingArgument {
+                        command: "monitor",
+                        requirement: "an actor name",
+                    });
                 }
                 Ok(ShellCommand::Monitor {
                     actor: parts[1].to_string(),
@@ -1797,422 +1861,20 @@ impl ShellCommand {
             }
             "unmonitor" => {
                 if parts.len() < 2 {
-                    return Err(anyhow!("unmonitor requires an actor name"));
+                    return Err(ShellError::MissingArgument {
+                        command: "unmonitor",
+                        requirement: "an actor name",
+                    });
                 }
                 Ok(ShellCommand::Unmonitor {
                     actor: parts[1].to_string(),
                 })
             }
             "monitors" => Ok(ShellCommand::Monitors),
-            _ => Err(anyhow!("Unknown command: {}", parts[0])),
+            _ => Err(ShellError::UnknownCommand(parts[0].to_string())),
         }
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    // ==================== Command Parsing Tests ====================
-
-    #[test]
-    fn test_parse_empty_line() {
-        let result = ShellCommand::parse_line("");
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Empty command"));
-    }
-
-    #[test]
-    fn test_parse_whitespace_only() {
-        let result = ShellCommand::parse_line("   ");
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_parse_unknown_command() {
-        let result = ShellCommand::parse_line("foobar");
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Unknown command"));
-    }
-
-    // Basic commands without arguments
-    #[test]
-    fn test_parse_actors() {
-        let cmd = ShellCommand::parse_line("actors").unwrap();
-        assert!(matches!(cmd, ShellCommand::Actors));
-    }
-
-    #[test]
-    fn test_parse_registry() {
-        let cmd = ShellCommand::parse_line("registry").unwrap();
-        assert!(matches!(cmd, ShellCommand::Registry));
-    }
-
-    #[test]
-    fn test_parse_nodes() {
-        let cmd = ShellCommand::parse_line("nodes").unwrap();
-        assert!(matches!(cmd, ShellCommand::Nodes));
-    }
-
-    #[test]
-    fn test_parse_stats() {
-        let cmd = ShellCommand::parse_line("stats").unwrap();
-        assert!(matches!(cmd, ShellCommand::Stats));
-    }
-
-    #[test]
-    fn test_parse_monitors() {
-        let cmd = ShellCommand::parse_line("monitors").unwrap();
-        assert!(matches!(cmd, ShellCommand::Monitors));
-    }
-
-    #[test]
-    fn test_parse_exit() {
-        let cmd = ShellCommand::parse_line("exit").unwrap();
-        assert!(matches!(cmd, ShellCommand::Exit));
-    }
-
-    #[test]
-    fn test_parse_quit() {
-        let cmd = ShellCommand::parse_line("quit").unwrap();
-        assert!(matches!(cmd, ShellCommand::Exit));
-    }
-
-    // Commands with arguments
-    #[test]
-    fn test_parse_help_no_arg() {
-        let cmd = ShellCommand::parse_line("help").unwrap();
-        match cmd {
-            ShellCommand::Help { command } => assert!(command.is_none()),
-            _ => panic!("Expected Help command"),
-        }
-    }
-
-    #[test]
-    fn test_parse_help_with_arg() {
-        let cmd = ShellCommand::parse_line("help actors").unwrap();
-        match cmd {
-            ShellCommand::Help { command } => assert_eq!(command, Some("actors".to_string())),
-            _ => panic!("Expected Help command"),
-        }
-    }
-
-    #[test]
-    fn test_parse_info() {
-        let cmd = ShellCommand::parse_line("info my_actor").unwrap();
-        match cmd {
-            ShellCommand::Info { actor } => assert_eq!(actor, "my_actor"),
-            _ => panic!("Expected Info command"),
-        }
-    }
-
-    #[test]
-    fn test_parse_info_missing_arg() {
-        let result = ShellCommand::parse_line("info");
-        assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("requires an actor name"));
-    }
-
-    #[test]
-    fn test_parse_stop() {
-        let cmd = ShellCommand::parse_line("stop my_actor").unwrap();
-        match cmd {
-            ShellCommand::Stop { actor } => assert_eq!(actor, "my_actor"),
-            _ => panic!("Expected Stop command"),
-        }
-    }
-
-    #[test]
-    fn test_parse_send() {
-        let cmd = ShellCommand::parse_line(r#"send my_actor {"cmd": "ping"}"#).unwrap();
-        match cmd {
-            ShellCommand::Send { actor, message } => {
-                assert_eq!(actor, "my_actor");
-                assert_eq!(message, r#"{"cmd": "ping"}"#);
-            }
-            _ => panic!("Expected Send command"),
-        }
-    }
-
-    #[test]
-    fn test_parse_send_multiword_message() {
-        let cmd = ShellCommand::parse_line("send actor hello world").unwrap();
-        match cmd {
-            ShellCommand::Send { actor, message } => {
-                assert_eq!(actor, "actor");
-                assert_eq!(message, "hello world");
-            }
-            _ => panic!("Expected Send command"),
-        }
-    }
-
-    #[test]
-    fn test_parse_send_missing_args() {
-        let result = ShellCommand::parse_line("send actor");
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_parse_call() {
-        let cmd = ShellCommand::parse_line(r#"call my_actor {"cmd": "get"}"#).unwrap();
-        match cmd {
-            ShellCommand::Call { actor, message } => {
-                assert_eq!(actor, "my_actor");
-                assert_eq!(message, r#"{"cmd": "get"}"#);
-            }
-            _ => panic!("Expected Call command"),
-        }
-    }
-
-    #[test]
-    fn test_parse_connect() {
-        let cmd = ShellCommand::parse_line("connect localhost:9000").unwrap();
-        match cmd {
-            ShellCommand::Connect { host } => assert_eq!(host, "localhost:9000"),
-            _ => panic!("Expected Connect command"),
-        }
-    }
-
-    #[test]
-    fn test_parse_disconnect() {
-        let cmd = ShellCommand::parse_line("disconnect node_a").unwrap();
-        match cmd {
-            ShellCommand::Disconnect { node } => assert_eq!(node, "node_a"),
-            _ => panic!("Expected Disconnect command"),
-        }
-    }
-
-    #[test]
-    fn test_parse_use() {
-        let cmd = ShellCommand::parse_line("use node_b").unwrap();
-        match cmd {
-            ShellCommand::Use { node } => assert_eq!(node, "node_b"),
-            _ => panic!("Expected Use command"),
-        }
-    }
-
-    #[test]
-    fn test_parse_use_local() {
-        let cmd = ShellCommand::parse_line("use local").unwrap();
-        match cmd {
-            ShellCommand::Use { node } => assert_eq!(node, "local"),
-            _ => panic!("Expected Use command"),
-        }
-    }
-
-    // pg subcommands
-    #[test]
-    fn test_parse_pg_list() {
-        let cmd = ShellCommand::parse_line("pg list").unwrap();
-        assert!(matches!(cmd, ShellCommand::PgList));
-    }
-
-    #[test]
-    fn test_parse_pg_members() {
-        let cmd = ShellCommand::parse_line("pg members my_group").unwrap();
-        match cmd {
-            ShellCommand::PgMembers { group } => assert_eq!(group, "my_group"),
-            _ => panic!("Expected PgMembers command"),
-        }
-    }
-
-    #[test]
-    fn test_parse_pg_missing_subcommand() {
-        let result = ShellCommand::parse_line("pg");
-        assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("requires a subcommand"));
-    }
-
-    #[test]
-    fn test_parse_pg_members_missing_group() {
-        let result = ShellCommand::parse_line("pg members");
-        assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("requires a group name"));
-    }
-
-    #[test]
-    fn test_parse_pg_unknown_subcommand() {
-        let result = ShellCommand::parse_line("pg foobar");
-        assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("Unknown pg subcommand"));
-    }
-
-    // cluster command
-    #[test]
-    fn test_parse_cluster_no_subcommand() {
-        let cmd = ShellCommand::parse_line("cluster").unwrap();
-        match cmd {
-            ShellCommand::Cluster { subcommand } => assert!(subcommand.is_none()),
-            _ => panic!("Expected Cluster command"),
-        }
-    }
-
-    #[test]
-    fn test_parse_cluster_with_subcommand() {
-        let cmd = ShellCommand::parse_line("cluster nodes").unwrap();
-        match cmd {
-            ShellCommand::Cluster { subcommand } => {
-                assert_eq!(subcommand, Some("nodes".to_string()))
-            }
-            _ => panic!("Expected Cluster command"),
-        }
-    }
-
-    // tree command
-    #[test]
-    fn test_parse_tree_no_arg() {
-        let cmd = ShellCommand::parse_line("tree").unwrap();
-        match cmd {
-            ShellCommand::Tree { actor } => assert!(actor.is_none()),
-            _ => panic!("Expected Tree command"),
-        }
-    }
-
-    #[test]
-    fn test_parse_tree_with_actor() {
-        let cmd = ShellCommand::parse_line("tree my_actor").unwrap();
-        match cmd {
-            ShellCommand::Tree { actor } => assert_eq!(actor, Some("my_actor".to_string())),
-            _ => panic!("Expected Tree command"),
-        }
-    }
-
-    // File commands
-    #[test]
-    fn test_parse_send_file() {
-        let cmd = ShellCommand::parse_line("send-file actor /path/to/file.json").unwrap();
-        match cmd {
-            ShellCommand::SendFile { actor, file_path } => {
-                assert_eq!(actor, "actor");
-                assert_eq!(file_path, "/path/to/file.json");
-            }
-            _ => panic!("Expected SendFile command"),
-        }
-    }
-
-    #[test]
-    fn test_parse_sendfile_alt() {
-        let cmd = ShellCommand::parse_line("sendfile actor file.json").unwrap();
-        match cmd {
-            ShellCommand::SendFile { actor, file_path } => {
-                assert_eq!(actor, "actor");
-                assert_eq!(file_path, "file.json");
-            }
-            _ => panic!("Expected SendFile command"),
-        }
-    }
-
-    #[test]
-    fn test_parse_load() {
-        let cmd = ShellCommand::parse_line("load /path/to/script.sh").unwrap();
-        match cmd {
-            ShellCommand::Load { script_path } => assert_eq!(script_path, "/path/to/script.sh"),
-            _ => panic!("Expected Load command"),
-        }
-    }
-
-    // Monitor commands
-    #[test]
-    fn test_parse_monitor() {
-        let cmd = ShellCommand::parse_line("monitor my_actor").unwrap();
-        match cmd {
-            ShellCommand::Monitor { actor } => assert_eq!(actor, "my_actor"),
-            _ => panic!("Expected Monitor command"),
-        }
-    }
-
-    #[test]
-    fn test_parse_unmonitor() {
-        let cmd = ShellCommand::parse_line("unmonitor my_actor").unwrap();
-        match cmd {
-            ShellCommand::Unmonitor { actor } => assert_eq!(actor, "my_actor"),
-            _ => panic!("Expected Unmonitor command"),
-        }
-    }
-
-    // ==================== Alias Tests ====================
-
-    #[test]
-    fn test_alias_a_for_actors() {
-        let cmd = ShellCommand::parse_line("a").unwrap();
-        assert!(matches!(cmd, ShellCommand::Actors));
-    }
-
-    #[test]
-    fn test_alias_r_for_registry() {
-        let cmd = ShellCommand::parse_line("r").unwrap();
-        assert!(matches!(cmd, ShellCommand::Registry));
-    }
-
-    #[test]
-    fn test_alias_i_for_info() {
-        let cmd = ShellCommand::parse_line("i my_actor").unwrap();
-        match cmd {
-            ShellCommand::Info { actor } => assert_eq!(actor, "my_actor"),
-            _ => panic!("Expected Info command"),
-        }
-    }
-
-    #[test]
-    fn test_alias_s_for_send() {
-        let cmd = ShellCommand::parse_line("s actor message").unwrap();
-        match cmd {
-            ShellCommand::Send { actor, message } => {
-                assert_eq!(actor, "actor");
-                assert_eq!(message, "message");
-            }
-            _ => panic!("Expected Send command"),
-        }
-    }
-
-    #[test]
-    fn test_alias_c_for_call() {
-        let cmd = ShellCommand::parse_line("c actor message").unwrap();
-        match cmd {
-            ShellCommand::Call { actor, message } => {
-                assert_eq!(actor, "actor");
-                assert_eq!(message, "message");
-            }
-            _ => panic!("Expected Call command"),
-        }
-    }
-
-    #[test]
-    fn test_alias_sf_for_send_file() {
-        let cmd = ShellCommand::parse_line("sf actor file.json").unwrap();
-        match cmd {
-            ShellCommand::SendFile { actor, file_path } => {
-                assert_eq!(actor, "actor");
-                assert_eq!(file_path, "file.json");
-            }
-            _ => panic!("Expected SendFile command"),
-        }
-    }
-
-    #[test]
-    fn test_alias_l_for_load() {
-        let cmd = ShellCommand::parse_line("l script.sh").unwrap();
-        match cmd {
-            ShellCommand::Load { script_path } => assert_eq!(script_path, "script.sh"),
-            _ => panic!("Expected Load command"),
-        }
-    }
-
-    #[test]
-    fn test_alias_q_for_quit() {
-        let cmd = ShellCommand::parse_line("q").unwrap();
-        assert!(matches!(cmd, ShellCommand::Exit));
-    }
-}
+mod lib_tests;

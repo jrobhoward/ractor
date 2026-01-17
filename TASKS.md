@@ -175,29 +175,34 @@
 
 ## Priority 2: Important (Should-Have for PR)
 
-### 2.1 Code Improvements
+### 2.1 Code Improvements ✅
 
 **Estimated Time**: 3-5 hours
+**Status**: Complete
 
-- [ ] **Refactor large functions**
-  - File: `ractor_shell/src/lib.rs`
-    - `execute()` method is likely very long
-    - Split into separate command handlers
-    - Consider command pattern with trait
+- [x] **Refactor large functions**
+  - `execute()` method was already well-structured with individual `cmd_*` handlers
+  - No further refactoring needed
 
-- [ ] **Improve error handling**
-  - Replace generic `anyhow::Error` with specific error types where appropriate
-  - Add context to errors using `.context()`
-  - Ensure all errors are user-friendly (shell commands shouldn't panic)
+- [x] **Improve error handling**
+  - Added `thiserror` dependency for strongly-typed errors
+  - Created `ractor_shell/src/error.rs` with `ShellError` enum
+  - Replaced all `anyhow::Error` with specific `ShellError` variants
+  - Error messages include actionable suggestions (e.g., "Use 'registry' command to list...")
+  - Added `ShellError::messaging()` helper for generic `MessagingErr<T>` conversion
+  - Documented best practices in `SKILLS.md`
 
-- [ ] **Reduce code duplication**
-  - Look for repeated patterns in command execution
-  - Extract common functionality into helper functions
-  - Example: Table formatting, actor lookups
+- [x] **Reduce code duplication**
+  - Analyzed table row structs - kept inline as they're context-specific
+  - Added `ShellError::messaging()` helper to avoid repetitive error conversion
+  - Documented patterns in `SKILLS.md`
 
-- [ ] **Add const for magic values**
-  - Port numbers, timeout values, buffer sizes
-  - Replace string literals with constants
+- [x] **Add const for magic values**
+  - Added `DEFAULT_RPC_TIMEOUT: Duration` (5 seconds)
+  - Added `DEFAULT_NODE_SERVER_PORT: u16` (9100)
+  - Added `DEFAULT_CLUSTER_COOKIE: &str`
+  - Added `KNOWN_PROCESS_GROUPS: &[&str]`
+  - Replaced all hardcoded timeouts with constant
 
 ### 2.2 Testing Enhancements
 

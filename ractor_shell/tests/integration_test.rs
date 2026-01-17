@@ -1,3 +1,5 @@
+#![allow(non_snake_case)]
+
 //! Integration tests for ractor_shell
 //!
 //! These tests verify the shell works correctly with live actors.
@@ -76,27 +78,24 @@ impl Actor for TestActor {
 // Note: ShellState tests are combined into one test to avoid registry conflicts
 // since ShellState::new() spawns a named "shell_monitor" actor
 #[tokio::test]
-async fn test_shell_state_and_prompt() {
+async fn ShellState___new_and_build_prompt___initializes_correctly() {
     let state = ShellState::new().await;
+
     assert!(state.is_ok());
-
     let state = state.unwrap();
-
-    // Test initial state
     assert!(!state.should_exit);
     assert!(state.current_node.is_none());
     assert!(state.connected_nodes.is_empty());
 
-    // Test prompt building
     let prompt = state.build_prompt();
+
     // Prompt should contain "ractor" and "@local"
     // Note: colored output may include ANSI codes
     assert!(prompt.contains("ractor") || prompt.contains("\x1b"));
 }
 
 #[tokio::test]
-async fn test_spawn_and_query_actor() {
-    // Spawn a test actor with a name
+async fn Actor___spawn_with_name___appears_in_registry() {
     let (actor_ref, _handle) = Actor::spawn(
         Some("test_integration_actor".to_string()),
         TestActor {
@@ -107,16 +106,14 @@ async fn test_spawn_and_query_actor() {
     .await
     .expect("Failed to spawn actor");
 
-    // Verify actor is in registry
     let registered = ractor::registry::registered();
-    assert!(registered.contains(&"test_integration_actor".to_string()));
 
-    // Clean up
+    assert!(registered.contains(&"test_integration_actor".to_string()));
     actor_ref.stop(None);
 }
 
 #[tokio::test]
-async fn test_dynamic_message_ping() {
+async fn supports_dynamic_messages___actor_responds_to_ping___returns_true() {
     let (actor_ref, _handle) = Actor::spawn(
         Some("test_ping_actor".to_string()),
         TestActor {
@@ -127,17 +124,14 @@ async fn test_dynamic_message_ping() {
     .await
     .expect("Failed to spawn actor");
 
-    // Test ping functionality
     let supports = ractor_shell::dynamic::supports_dynamic_messages(actor_ref.clone()).await;
-    assert!(supports);
 
-    // Clean up
+    assert!(supports);
     actor_ref.stop(None);
 }
 
 #[tokio::test]
-async fn test_process_group_membership() {
-    // Spawn actors and add them to a process group
+async fn pg___join_and_get_members___returns_all_members() {
     let (actor1, _) = Actor::spawn(
         Some("pg_test_actor_1".to_string()),
         TestActor {
@@ -147,7 +141,6 @@ async fn test_process_group_membership() {
     )
     .await
     .expect("Failed to spawn actor 1");
-
     let (actor2, _) = Actor::spawn(
         Some("pg_test_actor_2".to_string()),
         TestActor {
@@ -158,23 +151,20 @@ async fn test_process_group_membership() {
     .await
     .expect("Failed to spawn actor 2");
 
-    // Join process group
     ractor::pg::join(
         "test_integration_group".to_string(),
         vec![actor1.get_cell(), actor2.get_cell()],
     );
 
-    // Verify membership
     let members = ractor::pg::get_members(&"test_integration_group".to_string());
-    assert_eq!(members.len(), 2);
 
-    // Clean up
+    assert_eq!(members.len(), 2);
     actor1.stop(None);
     actor2.stop(None);
 }
 
 #[tokio::test]
-async fn test_call_response_success() {
+async fn DynamicMessage___call_with_ping_command___returns_success_response() {
     let (actor_ref, _handle) = Actor::spawn(
         Some("test_call_actor".to_string()),
         TestActor {
@@ -185,7 +175,6 @@ async fn test_call_response_success() {
     .await
     .expect("Failed to spawn actor");
 
-    // Send a call message
     use ractor::rpc::CallResult;
     let result = actor_ref
         .call(
@@ -204,13 +193,11 @@ async fn test_call_response_success() {
         },
         _ => panic!("Expected success result"),
     }
-
-    // Clean up
     actor_ref.stop(None);
 }
 
 #[tokio::test]
-async fn test_call_response_error() {
+async fn DynamicMessage___call_with_unknown_command___returns_error_response() {
     let (actor_ref, _handle) = Actor::spawn(
         Some("test_error_actor".to_string()),
         TestActor {
@@ -221,7 +208,6 @@ async fn test_call_response_error() {
     .await
     .expect("Failed to spawn actor");
 
-    // Send a call with unknown command
     use ractor::rpc::CallResult;
     let result = actor_ref
         .call(
@@ -240,13 +226,11 @@ async fn test_call_response_error() {
         },
         _ => panic!("Expected success result"),
     }
-
-    // Clean up
     actor_ref.stop(None);
 }
 
 #[tokio::test]
-async fn test_cast_message() {
+async fn DynamicMessage___cast_increment___updates_actor_state() {
     let (actor_ref, _handle) = Actor::spawn(
         Some("test_cast_actor".to_string()),
         TestActor {
@@ -257,15 +241,11 @@ async fn test_cast_message() {
     .await
     .expect("Failed to spawn actor");
 
-    // Send cast message to increment state
     actor_ref
         .cast(DynamicMessage::Cast(json!({"command": "increment"})))
         .expect("Failed to cast");
-
-    // Give actor time to process
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
-    // Verify state changed via call
     use ractor::rpc::CallResult;
     let result = actor_ref
         .call(
@@ -283,7 +263,5 @@ async fn test_cast_message() {
         },
         _ => panic!("Expected success result"),
     }
-
-    // Clean up
     actor_ref.stop(None);
 }
