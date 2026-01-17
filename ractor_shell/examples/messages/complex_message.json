@@ -1,0 +1,13 @@
+{
+  "DoWork": {
+    "task_id": "task_123",
+    "priority": "high",
+    "data": {
+      "key1": "value1",
+      "key2": 42,
+      "nested": {
+        "items": ["a", "b", "c"]
+      }
+    }
+  }
+}

@@ -6,6 +6,17 @@ members = [
     "ractor_playground",
     "ractor_cluster_integration_tests",
     "ractor_example_entry_proc",
+    "ractor_shell",
     "xtask",
 ]
+
+# Default members excludes ractor_shell
+# To build shell: cargo build -p ractor_shell
+# To build all: cargo build --workspace
+default-members = [
+    "ractor",
+    "ractor_cluster",
+    "ractor_cluster_derive",
+]
+
 resolver = "2"

@@ -15,9 +15,31 @@ This is a Cargo workspace with multiple crates:
 - **ractor_cluster_integration_tests**: Integration tests for clustering
 - **ractor_example_entry_proc**: Example entry point procedures
 - **ractor_playground**: Playground/experimentation crate
+- **ractor_shell**: Interactive REPL for debugging actor systems (NOT built by default)
 - **xtask**: Build/development automation tasks
 
 ## Build and Test Commands
+
+### Building ractor_shell (Optional)
+
+The ractor_shell is an interactive REPL for debugging actor systems, inspired by Erlang's `erl` shell. It is **NOT** built by default.
+
+```bash
+# Build ractor_shell specifically
+cargo build -p ractor_shell
+
+# Run the shell demo
+cargo run --example demo -p ractor_shell
+
+# Run other shell examples
+cargo run --example dynamic_actor -p ractor_shell
+cargo run --example monitoring_demo -p ractor_shell
+
+# Install the shell binary
+cargo install --path ractor_shell
+```
+
+See `ractor_shell/README.md` for complete shell documentation.
 
 ### Running Tests
 
@@ -272,6 +294,71 @@ Critical files for understanding the architecture:
 - `ractor/src/message.rs`: Message trait definition
 - `ractor_cluster/src/node/`: NodeServer and NodeSession implementations
 - `docs/runtime-semantics.md`: Detailed runtime guarantees and edge cases
+
+## ractor_shell - Interactive Debugging REPL
+
+The `ractor_shell` provides an Erlang-style interactive shell for debugging and observing Ractor actor systems. It offers capabilities similar to Erlang's Observer tool.
+
+### Key Features
+
+- **Actor Introspection**: List and inspect all actors (via registry and process groups)
+- **Remote Connections**: Connect to distributed ractor_cluster nodes
+- **Dynamic Messages**: Send arbitrary JSON messages to actors implementing `DynamicMessage`
+- **Monitoring**: Track actor lifecycle events (start, stop, panic, failure)
+- **Cluster Topology**: Visualize mesh topology and cross-cluster process groups
+- **Tab Completion**: Context-aware command and argument completion
+- **Command Aliases**: Short-form commands (e.g., `a` for `actors`, `r` for `registry`)
+
+### Usage
+
+```bash
+# Run the demo (spawns test actors and starts shell)
+cargo run --example demo -p ractor_shell
+
+# Available commands in shell
+ractor@local > help
+ractor@local > actors           # List all actors
+ractor@local > registry         # Show registered actors
+ractor@local > pg members <group>  # List process group members
+ractor@local > info <actor>     # Show actor details
+ractor@local > monitor <actor>  # Watch lifecycle events
+ractor@local > connect <host:port>  # Connect to remote node
+ractor@local > cluster          # Show cluster topology
+```
+
+### Dynamic Message Interface
+
+Actors can opt-in to receive arbitrary JSON from the shell:
+
+```rust
+use ractor_shell::dynamic::DynamicMessage;
+
+impl Actor for MyActor {
+    type Msg = DynamicMessage;
+    // ... handle Cast(json), Call(json, reply), Ping(reply) variants
+}
+```
+
+From the shell:
+```bash
+ractor@local > send my_actor {"command": "increment"}
+ractor@local > call my_actor {"command": "get_value"}
+```
+
+### Documentation
+
+- `ractor_shell/README.md`: Complete feature documentation
+- `ractor_shell/DYNAMIC_MESSAGES.md`: Dynamic message interface guide
+- `ractor_shell/MONITORING.md`: Actor monitoring guide
+- `ractor_shell/UX_FEATURES.md`: Tab completion and aliases
+
+### Current Limitations
+
+- Only shows named/registered actors (not all actors in system)
+- Process groups shown instead of full supervision trees
+- Remote message sending not yet fully implemented
+
+See `ractor_shell/README.md` for complete documentation and testing guides.
 
 ## Additional Resources
 

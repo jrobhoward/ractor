@@ -1,0 +1,16 @@
+# Test script for Phase 4 features
+
+# Show the enhanced help
+help
+
+# List registered actors
+registry
+
+# Test JSON message parsing (will show limitation message)
+# send demo_actor_1 {"Test": "message"}
+
+# Show stats
+stats
+
+# Show process group tree
+tree

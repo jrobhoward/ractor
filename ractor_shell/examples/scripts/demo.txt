@@ -1,0 +1,23 @@
+# Demo shell script for ractor_shell
+# Lines starting with # are comments
+
+# Show help
+help
+
+# List all registered actors
+registry
+
+# Show system statistics
+stats
+
+# List process groups
+pg list
+
+# Show process group tree
+tree
+
+# Example: Send a message (will parse but not actually send due to type safety)
+# send ping_pong {"Ping": ["script", 1]}
+
+# Example: Query actor info
+# info ping_pong
