@@ -673,3 +673,102 @@ fn create_test_event(actor_name: &str, message: &str) -> TraceEvent {
         fields: vec![],
     }
 }
+
+// ============================================================================
+// ListProcessGroups Tests
+// ============================================================================
+
+#[tokio::test]
+async fn IntrospectionActor___list_process_groups___returns_group_list() {
+    use ractor::pg;
+
+    // Create a test actor and add it to a process group
+    let (test_actor_ref, _test_handle) =
+        Actor::spawn(Some("pg_list_test_actor".to_string()), DynamicTestActor, ())
+            .await
+            .expect("Failed to spawn test actor");
+
+    let group_name = "test_pg_list_group";
+    pg::join(group_name.to_string(), vec![test_actor_ref.get_cell()]);
+
+    let args = IntrospectionArgs {
+        node_name: "pg_list_test_node".to_string(),
+        tracing_handle: None,
+    };
+
+    let (introspection_ref, _handle) = Actor::spawn(
+        Some("pg_list_test_introspection".to_string()),
+        IntrospectionActor,
+        args,
+    )
+    .await
+    .expect("Failed to spawn IntrospectionActor");
+
+    let result = introspection_ref
+        .call(
+            ShellProtocolMessage::ListProcessGroups,
+            Some(DEFAULT_RPC_TIMEOUT),
+        )
+        .await;
+
+    match result {
+        Ok(ractor::rpc::CallResult::Success(groups)) => {
+            let found = groups.iter().any(|g| g == group_name);
+            assert!(found, "Should find test_pg_list_group in process groups");
+        }
+        other => panic!("Expected group list, got {:?}", other),
+    }
+
+    test_actor_ref.stop(None);
+    introspection_ref.stop(None);
+}
+
+// ============================================================================
+// StopActor Tests
+// ============================================================================
+
+#[tokio::test]
+async fn IntrospectionActor___stop_actor___stops_registered_actor() {
+    // Create a test actor
+    let (_test_actor_ref, test_handle) =
+        Actor::spawn(Some("stop_test_actor".to_string()), DynamicTestActor, ())
+            .await
+            .expect("Failed to spawn test actor");
+
+    let args = IntrospectionArgs {
+        node_name: "stop_test_node".to_string(),
+        tracing_handle: None,
+    };
+
+    let (introspection_ref, _handle) = Actor::spawn(
+        Some("stop_test_introspection".to_string()),
+        IntrospectionActor,
+        args,
+    )
+    .await
+    .expect("Failed to spawn IntrospectionActor");
+
+    // Verify actor exists in registry
+    assert!(
+        ractor::registry::where_is("stop_test_actor".to_string()).is_some(),
+        "Actor should be in registry before stop"
+    );
+
+    // Stop the actor via introspection
+    let result = introspection_ref.cast(ShellProtocolMessage::StopActor(
+        "stop_test_actor".to_string(),
+    ));
+
+    assert!(result.is_ok(), "Cast should succeed");
+
+    // Wait for the actor to stop
+    let _ = test_handle.await;
+
+    // Verify actor is no longer in registry
+    assert!(
+        ractor::registry::where_is("stop_test_actor".to_string()).is_none(),
+        "Actor should be removed from registry after stop"
+    );
+
+    introspection_ref.stop(None);
+}

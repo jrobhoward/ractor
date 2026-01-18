@@ -1128,13 +1128,62 @@ impl ShellState {
     }
 
     async fn cmd_pg_list(&self) -> ShellResult<()> {
-        println!("{}", "Process Groups:".bold());
-        println!("Note: Process group enumeration not available in ractor 0.15");
-        println!("You can query specific groups with: pg members <group_name>");
-        println!();
-        println!("Known groups:");
-        println!("  - {}", "ping_pong".green());
-        println!("  - {}", "ractor_shell_introspection".green());
+        // Check if we're working with a remote node
+        if let Some(node_name) = &self.current_node {
+            if let Some(introspection_ref) = self.connected_nodes.get(node_name) {
+                let result = introspection_ref
+                    .call(
+                        ShellProtocolMessage::ListProcessGroups,
+                        Some(DEFAULT_RPC_TIMEOUT),
+                    )
+                    .await
+                    .map_err(ShellError::messaging)?;
+
+                match result {
+                    CallResult::Success(groups) => {
+                        if groups.is_empty() {
+                            println!("No process groups found on {}", node_name);
+                            return Ok(());
+                        }
+
+                        println!(
+                            "{}",
+                            format!("Process groups on {} ({} total):", node_name, groups.len())
+                                .bold()
+                        );
+                        for group in groups {
+                            println!("  - {}", group.green());
+                        }
+                    }
+                    CallResult::Timeout => return Err(ShellError::rpc_timeout()),
+                    CallResult::SenderError => return Err(ShellError::RpcSenderError),
+                }
+                return Ok(());
+            } else {
+                return Err(ShellError::NodeNotConnected(node_name.clone()));
+            }
+        }
+
+        // Local execution
+        let groups = pg::which_groups();
+        if groups.is_empty() {
+            println!("No process groups found");
+            println!();
+            println!(
+                "  {} Use 'pg members <group>' to query specific groups",
+                "•".bright_black()
+            );
+            return Ok(());
+        }
+
+        println!(
+            "{}",
+            format!("Process groups ({} total):", groups.len()).bold()
+        );
+        for group in groups {
+            println!("  - {}", group.green());
+        }
+
         Ok(())
     }
 
@@ -2168,6 +2217,26 @@ impl ShellState {
     }
 
     async fn cmd_stop(&self, actor: String) -> ShellResult<()> {
+        // Check if we're working with a remote node
+        if let Some(node_name) = &self.current_node {
+            if let Some(introspection_ref) = self.connected_nodes.get(node_name) {
+                introspection_ref
+                    .cast(ShellProtocolMessage::StopActor(actor.clone()))
+                    .map_err(ShellError::messaging)?;
+
+                println!(
+                    "{} Sent stop signal to '{}' on {}",
+                    "✓".green(),
+                    actor,
+                    node_name
+                );
+                return Ok(());
+            } else {
+                return Err(ShellError::NodeNotConnected(node_name.clone()));
+            }
+        }
+
+        // Local execution
         if let Some(cell) = registry::where_is(actor.clone()) {
             cell.stop(Some("Stopped by shell".to_string()));
             println!("{} Sent stop signal to '{}'", "✓".green(), actor);

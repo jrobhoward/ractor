@@ -174,6 +174,11 @@ impl Actor for IntrospectionActor {
                 let _ = reply.send(actors);
             }
 
+            ShellProtocolMessage::ListProcessGroups(reply) => {
+                let groups = pg::which_groups();
+                let _ = reply.send(groups);
+            }
+
             ShellProtocolMessage::GetProcessGroupMembers(group, reply) => {
                 let members = pg::get_members(&group);
                 let actors: Vec<ActorInfo> = members.iter().map(ActorInfo::from_cell).collect();

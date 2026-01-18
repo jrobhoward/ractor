@@ -53,6 +53,10 @@ pub enum ShellProtocolMessage {
     #[rpc]
     ListRegisteredActors(RpcReplyPort<Vec<ActorInfo>>),
 
+    /// List all process groups on the target node
+    #[rpc]
+    ListProcessGroups(RpcReplyPort<Vec<String>>),
+
     /// Get process group members
     #[rpc]
     GetProcessGroupMembers(String, RpcReplyPort<Vec<ActorInfo>>),
