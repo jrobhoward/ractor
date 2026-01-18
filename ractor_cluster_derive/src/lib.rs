@@ -196,11 +196,15 @@ fn impl_message_macro(ast: &syn::DeriveInput) -> syn::Result<TokenStream> {
             }
         };
 
-        // Optionally generate SchemaProvider impl if #[ractor_shell] is present
+        // Optionally generate SchemaProvider impl and dispatcher if #[ractor_shell] is present
         let schema_impl = if has_shell_attr {
             let schema_provider_impl =
                 impl_schema_provider(name, &impl_generics, &ty_generics, where_clause, enum_data)?;
-            quote! { #schema_provider_impl }
+            let dispatcher_module = impl_dispatcher_module(name, enum_data)?;
+            quote! {
+                #dispatcher_module
+                #schema_provider_impl
+            }
         } else {
             quote! {}
         };
@@ -597,6 +601,29 @@ fn impl_schema_provider(
         .map(|variant| impl_variant_to_json(name, variant))
         .collect::<Result<Vec<_>, _>>()?;
 
+    // Check if there are any RPC variants to determine if we should generate a dispatcher
+    let has_rpc_variants = enum_data
+        .variants
+        .iter()
+        .any(|v| v.attrs.iter().any(|attr| attr.path().is_ident("rpc")));
+
+    // Generate the dispatcher() method if there are RPC variants
+    let dispatcher_method = if has_rpc_variants {
+        let module_name = format_ident!(
+            "__ractor_shell_{}_dispatcher",
+            name.to_string().to_lowercase()
+        );
+        quote! {
+            fn dispatcher() -> Option<ractor::RpcDispatcher> {
+                Some(std::sync::Arc::new(|cell, variant, args| {
+                    Box::pin(#module_name::dispatch_rpc(cell, variant, args))
+                }))
+            }
+        }
+    } else {
+        quote! {}
+    };
+
     // Note: We don't wrap this in #[cfg(feature = "shell-introspection")] because
     // that feature is defined in the `ractor` crate, not in the crate using this derive.
     // If the feature isn't enabled, ractor::SchemaProvider won't exist and compilation
@@ -619,6 +646,8 @@ fn impl_schema_provider(
                     #( #to_json_arms ),*
                 }
             }
+
+            #dispatcher_method
         }
     })
 }
@@ -719,7 +748,9 @@ fn impl_variant_from_json(_enum_name: &Ident, variant: &Variant) -> syn::Result<
 
     match &variant.fields {
         Fields::Unit => Ok(quote! {
-            #variant_name_str => Ok(Self::#variant_name)
+            #variant_name_str => {
+                Ok(Self::#variant_name)
+            }
         }),
         Fields::Unnamed(unnamed) => {
             let field_extractions: Vec<_> = unnamed
@@ -876,4 +907,126 @@ fn impl_variant_to_json(_enum_name: &Ident, variant: &Variant) -> syn::Result<im
             })
         }
     }
+}
+
+// ======================== Dispatcher Generation ======================== //
+
+/// Generate a hidden dispatcher module for typed RPC calls via shell.
+///
+/// This generates a module containing a `dispatch_rpc` function that:
+/// 1. Converts ActorCell to typed ActorRef
+/// 2. Matches on RPC variant name
+/// 3. Makes typed RPC call using ractor::call!
+/// 4. Serializes the result to JSON
+fn impl_dispatcher_module(
+    message_type: &Ident,
+    enum_data: &syn::DataEnum,
+) -> syn::Result<impl ToTokens> {
+    // Collect only RPC variants
+    let rpc_variants: Vec<_> = enum_data
+        .variants
+        .iter()
+        .filter(|v| v.attrs.iter().any(|attr| attr.path().is_ident("rpc")))
+        .collect();
+
+    // If no RPC variants, don't generate dispatcher
+    if rpc_variants.is_empty() {
+        return Ok(quote! {});
+    }
+
+    // Generate match arms for each RPC variant
+    let dispatcher_arms: Vec<_> = rpc_variants
+        .iter()
+        .map(|variant| impl_dispatcher_arm(message_type, variant))
+        .collect::<Result<Vec<_>, _>>()?;
+
+    // Generate module name based on message type (lowercase with underscores)
+    let module_name = format_ident!(
+        "__ractor_shell_{}_dispatcher",
+        message_type.to_string().to_lowercase()
+    );
+
+    Ok(quote! {
+        #[doc(hidden)]
+        mod #module_name {
+            use super::*;
+
+            pub async fn dispatch_rpc(
+                cell: ractor::ActorCell,
+                variant: String,
+                _args: serde_json::Value,
+            ) -> Result<serde_json::Value, String> {
+                let actor_ref: ractor::ActorRef<#message_type> = ractor::ActorRef::from(cell);
+                let timeout = Some(std::time::Duration::from_secs(5));
+
+                match variant.as_str() {
+                    #( #dispatcher_arms ),*
+                    _ => Err(format!("Unknown RPC variant: {}", variant))
+                }
+            }
+        }
+    })
+}
+
+/// Generate a match arm for a single RPC variant in the dispatcher.
+fn impl_dispatcher_arm(message_type: &Ident, variant: &Variant) -> syn::Result<impl ToTokens> {
+    let variant_name = &variant.ident;
+    let variant_name_str = variant_name.to_string();
+
+    // Get the fields for this variant
+    let fields = match &variant.fields {
+        Fields::Unnamed(unnamed) => {
+            if unnamed.unnamed.is_empty() {
+                return Err(syn::Error::new(
+                    variant.span(),
+                    "RPC variant must have at least one field (RpcReplyPort<T>)",
+                ));
+            }
+            &unnamed.unnamed
+        }
+        _ => {
+            return Err(syn::Error::new(
+                variant.span(),
+                "RPC variants must use unnamed fields",
+            ));
+        }
+    };
+
+    // For now, only support RPCs with just a reply port (no arguments)
+    // Future enhancement: parse args from JSON for variants with multiple fields
+    if fields.len() > 1 {
+        // This RPC has arguments before the reply port - skip dispatcher generation
+        // The shell will get an "unknown variant" error, but schema introspection still works
+        return Ok(quote! {
+            #variant_name_str => {
+                Err(format!(
+                    "RPC '{}' requires arguments. Argument parsing is not yet implemented. \
+                     This RPC can be called through DynamicMessage or application-specific handlers.",
+                    #variant_name_str
+                ))
+            }
+        });
+    }
+
+    // Single-field RPC: just the reply port
+    Ok(quote! {
+        #variant_name_str => {
+            match actor_ref.call(
+                |reply_port| #message_type::#variant_name(reply_port),
+                timeout
+            ).await {
+                Ok(ractor::rpc::CallResult::Success(result)) => {
+                    serde_json::to_value(&result)
+                        .map_err(|e| format!("Serialization failed: {}", e))
+                }
+                Ok(ractor::rpc::CallResult::Timeout) => {
+                    Err("RPC timeout".to_string())
+                }
+                Ok(ractor::rpc::CallResult::SenderError) => {
+                    Err("Actor stopped or unreachable".to_string())
+                }
+                Err(e) => Err(format!("RPC failed: {:?}", e))
+            }
+        }
+    })
 }

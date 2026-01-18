@@ -79,11 +79,48 @@
 
 ---
 
-## Priority 3: Remote `top` Support
+## Priority 3: Remote Command Support
 
-**Estimated Time**: 2-3 hours
-**Value**: HIGH - Distributed debugging capability
+**Estimated Time**: 4-6 hours
+**Value**: HIGH - The primary use case is remote interaction, not local monitoring
 **Core Changes**: None - protocol changes only
+
+**Philosophy**: The shell's primary purpose is interacting with remote nodes. All commands that make sense remotely should work in remote context.
+
+### Currently Remote-Capable:
+- [x] `actors` - Lists actors on remote node
+- [x] `registry` - Lists registered actors on remote node
+- [x] `info` - Shows actor info from remote node
+- [x] `schema` - Shows message schema from remote node
+- [x] `send` / `call` - Sends messages to remote actors
+- [x] `stats` - Shows stats from remote node
+- [x] `supervtree` - Shows supervision tree from remote node
+- [x] `parent` - Shows parent from remote node
+- [x] `pg members` - Lists process group members from remote node
+
+### Need Remote Support:
+
+- [ ] **Add remote `stop` command**
+  - Add `StopActor(String, RpcReplyPort<Result<(), String>>)` to protocol
+  - IntrospectionActor calls `registry::where_is()` then `cell.stop()`
+  - Return success/failure to caller
+  - ~30 minutes
+
+- [ ] **Add remote `pg list` command**
+  - Add `ListProcessGroups(RpcReplyPort<Vec<String>>)` to protocol
+  - IntrospectionActor calls `pg::which_groups()`
+  - ~30 minutes
+
+- [ ] **Add remote `tree` command** (process group tree)
+  - Add `GetProcessGroupTree(RpcReplyPort<...>)` to protocol
+  - ~45 minutes
+
+- [ ] **Add remote `monitor` / `unmonitor` / `monitors` commands**
+  - More complex - need to relay lifecycle events back to shell
+  - May need persistent subscription mechanism
+  - ~2 hours
+
+### Remote `top` Support:
 
 - [ ] **Add `GetActorMetrics` protocol message**
   - New message in `protocol.rs`: `GetActorMetrics(RpcReplyPort<Vec<ActorMetrics>>)`
@@ -219,7 +256,7 @@
 
 ---
 
-## Priority 10: Schema-Based Generic RPC Dispatch (Long-term Investigation)
+## Priority 10: Schema-Based Generic RPC Dispatch ✅ PARTIAL
 
 **Estimated Time**: Unknown - Research required
 **Value**: LOW (workarounds exist)
@@ -228,38 +265,31 @@
 
 **Problem**: Remote typed RPC to cluster actors requires compile-time knowledge of message types. When actors are in example code (not the library), the introspection layer can't directly call typed RPCs.
 
-**Current Workarounds**:
+**Status**: ✅ **Basic dispatcher implemented!** The `#[ractor_shell]` macro now generates typed RPC dispatchers for single-argument RPCs (just `RpcReplyPort<T>`). This covers most common use cases including RaftMessage's `GetStatus`, `IsLeader`, `GetLeader`, and `GetPeers` RPCs.
+
+**What Works**:
+- [x] Macro generates dispatcher module for `#[ractor_shell]` enums
+- [x] Dispatcher handles RPCs with only `RpcReplyPort<T>` argument
+- [x] 5-second timeout with proper error handling
+- [x] Schema registry stores and retrieves dispatchers
+- [x] Introspection layer calls dispatchers automatically
+- [x] Works for both local and remote actors
+
+**Remaining Enhancement** (low priority):
+- [ ] **Parse arguments from JSON for RPCs with additional fields**
+  - Example: `UpdateValue(i32, RpcReplyPort<bool>)` - currently returns helpful error
+  - Would require JSON → typed argument deserialization in generated dispatcher
+  - Macro would need to:
+    1. Parse non-RpcReplyPort fields as arguments
+    2. Deserialize JSON to those types using serde
+    3. Pass them to the message constructor
+  - See `MACRO_DISPATCHER_PLAN.md` "Future Enhancements" section
+  - ~2-3 hours estimated
+
+**Current Workarounds** (still valid for complex cases):
 1. ✅ Actors implement DynamicMessage wrapper (works, requires per-actor code)
 2. ✅ Use remote tracing to observe behavior (passive observation)
 3. ✅ Local typed RPC works fine (same process)
-
-**Long-term Solution** (investigate feasibility):
-Build a generic RPC dispatcher using the `#[ractor_shell]` schema registry that can:
-- Parse variant names and field types from schema metadata
-- Construct typed messages from JSON at runtime
-- Handle RpcReplyPort creation and response routing
-- Support both Cast and Call variants generically
-
-**Technical Challenges**:
-1. Runtime type construction in Rust (no reflection)
-2. RpcReplyPort<T> creation requires knowing T at compile time
-3. Variant construction from JSON requires custom deserialization logic
-4. Error handling for malformed JSON/wrong types
-5. Performance overhead vs. compile-time dispatch
-
-**Research Questions**:
-- Can we use `Any` + downcasting for reply ports?
-- Can macro generate constructor functions stored in registry?
-- What's the performance impact of runtime dispatch?
-- How does this interact with cluster serialization?
-
-**Why Low Priority**:
-- DynamicMessage wrapper pattern works well
-- Only affects example/user code, not library
-- Adds significant complexity for marginal benefit
-- Better to document the pattern than build complex infrastructure
-
-**Decision**: Document as future investigation. Current DynamicMessage pattern is the recommended approach for custom typed actors.
 
 ---
 

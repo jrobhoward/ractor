@@ -28,8 +28,39 @@
 //! - Returns a JSON schema describing the message variants
 //! - Provides JSON-to-message deserialization
 //! - Provides message-to-JSON serialization for responses
+//! - Optionally provides a typed RPC dispatcher for shell integration
 
 use serde_json::Value;
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::Arc;
+
+/// Type-erased async RPC dispatcher for shell integration.
+///
+/// This type allows the shell to make typed RPC calls to actors without
+/// compile-time knowledge of the message type. The dispatcher is generated
+/// by the `#[ractor_shell]` macro and bridges JSON arguments to typed messages.
+///
+/// # Arguments
+///
+/// * `ActorCell` - The actor to call (works for both local and remote actors)
+/// * `String` - The RPC variant name (e.g., "GetStatus")
+/// * `Value` - JSON arguments for the RPC (currently unused, reserved for future)
+///
+/// # Returns
+///
+/// A future that resolves to either:
+/// - `Ok(Value)` - JSON-serialized RPC response
+/// - `Err(String)` - Error message describing what went wrong
+pub type RpcDispatcher = Arc<
+    dyn Fn(
+            crate::ActorCell,
+            String,
+            Value,
+        ) -> Pin<Box<dyn Future<Output = Result<Value, String>> + Send>>
+        + Send
+        + Sync,
+>;
 
 /// Error type for JSON deserialization failures.
 #[derive(Debug, Clone)]
@@ -126,4 +157,19 @@ pub trait SchemaProvider: crate::Message + Sized {
     ///
     /// This is primarily used for serializing RPC responses back to the shell.
     fn to_json(&self) -> Value;
+
+    /// Returns an optional RPC dispatcher for shell integration.
+    ///
+    /// The dispatcher enables the shell to make typed RPC calls to actors
+    /// without compile-time knowledge of the message type. This is generated
+    /// automatically by the `#[ractor_shell]` macro for message enums with
+    /// `#[rpc]` variants.
+    ///
+    /// # Returns
+    ///
+    /// * `Some(dispatcher)` - For message types with RPC variants
+    /// * `None` - For message types without RPC variants (default)
+    fn dispatcher() -> Option<RpcDispatcher> {
+        None
+    }
 }

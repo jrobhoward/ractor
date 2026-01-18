@@ -439,7 +439,7 @@ async fn call_dynamic_message_to_actor(
 async fn call_typed_rpc_on_actor(
     actor_name: &str,
     variant_name: &str,
-    _args: serde_json::Value,
+    args: serde_json::Value,
 ) -> TypedRpcResult {
     // Check if the actor has a registered schema
     if !crate::schema_registry::has_schema(actor_name) {
@@ -447,25 +447,22 @@ async fn call_typed_rpc_on_actor(
     }
 
     // Find the actor in registry
-    let Some(_cell) = registry::where_is(actor_name.to_string()) else {
+    let Some(cell) = registry::where_is(actor_name.to_string()) else {
         return TypedRpcResult::ActorNotFound;
     };
 
-    // Generic typed RPC dispatch requires runtime type information that isn't
-    // available in Rust's type system. The schema registry stores schema info
-    // (variant names, field types) but can't construct or dispatch messages
-    // without compile-time knowledge of the message type.
-    //
-    // To call typed actors:
-    // 1. If the actor implements DynamicMessage, use `call <actor> {json}`
-    // 2. Schema introspection (`schema <actor>`) still works to see available variants
-    //
-    // For custom typed actors, applications can:
-    // - Implement DynamicMessage as a wrapper
-    // - Create application-specific introspection handlers
+    // Try dispatcher-based RPC first
+    if let Some(dispatcher) = crate::schema_registry::get_dispatcher(actor_name) {
+        match dispatcher(cell, variant_name.to_string(), args).await {
+            Ok(result) => return TypedRpcResult::Success(result),
+            Err(e) => return TypedRpcResult::CallFailed(e),
+        }
+    }
+
+    // Fallback: no dispatcher available
     TypedRpcResult::CallFailed(format!(
         "Typed RPC for '{}::{}' not available via introspection. \
-         Use DynamicMessage or application-specific handlers.",
+         Actor has schema but no dispatcher. Add #[ractor_shell] to enable RPC.",
         actor_name, variant_name
     ))
 }

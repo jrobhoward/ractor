@@ -33,12 +33,20 @@
 //! for schema-enabled actors is handled through the IntrospectionActor protocol,
 //! which has compile-time knowledge of the message types.
 
-use ractor::SchemaProvider;
+use ractor::{RpcDispatcher, SchemaProvider};
 use std::collections::HashMap;
 use std::sync::RwLock;
 
-/// Global registry mapping actor names to their schema JSON strings.
-static SCHEMA_REGISTRY: RwLock<Option<HashMap<String, &'static str>>> = RwLock::new(None);
+/// Entry in the schema registry containing both schema and optional dispatcher.
+struct SchemaEntry {
+    /// JSON schema string describing the message variants and fields.
+    schema: &'static str,
+    /// Optional RPC dispatcher for making typed RPC calls via the shell.
+    dispatcher: Option<RpcDispatcher>,
+}
+
+/// Global registry mapping actor names to their schema and dispatcher.
+static SCHEMA_REGISTRY: RwLock<Option<HashMap<String, SchemaEntry>>> = RwLock::new(None);
 
 /// Initialize the registry if needed.
 fn ensure_initialized() {
@@ -76,7 +84,13 @@ pub fn register<M: SchemaProvider + 'static>(actor_name: &str) {
     ensure_initialized();
     if let Ok(mut registry) = SCHEMA_REGISTRY.write() {
         if let Some(map) = registry.as_mut() {
-            map.insert(actor_name.to_string(), M::message_schema());
+            map.insert(
+                actor_name.to_string(),
+                SchemaEntry {
+                    schema: M::message_schema(),
+                    dispatcher: M::dispatcher(),
+                },
+            );
         }
     }
 }
@@ -125,7 +139,7 @@ pub fn has_schema(actor_name: &str) -> bool {
 pub fn get_schema(actor_name: &str) -> Option<String> {
     SCHEMA_REGISTRY.read().ok().and_then(|r| {
         r.as_ref()
-            .and_then(|m| m.get(actor_name).map(|s| s.to_string()))
+            .and_then(|m| m.get(actor_name).map(|entry| entry.schema.to_string()))
     })
 }
 
@@ -141,7 +155,7 @@ pub fn list_schemas() -> Vec<(String, String)> {
         .and_then(|r| {
             r.as_ref().map(|m| {
                 m.iter()
-                    .map(|(name, schema)| (name.clone(), schema.to_string()))
+                    .map(|(name, entry)| (name.clone(), entry.schema.to_string()))
                     .collect()
             })
         })
@@ -159,6 +173,44 @@ pub fn list_schemas() -> Vec<(String, String)> {
 /// The parsed schema as a JSON Value, or None if not found or invalid
 pub fn get_schema_parsed(actor_name: &str) -> Option<serde_json::Value> {
     get_schema(actor_name).and_then(|s| serde_json::from_str(&s).ok())
+}
+
+/// Get the RPC dispatcher for an actor.
+///
+/// # Arguments
+///
+/// * `actor_name` - The registered name of the actor
+///
+/// # Returns
+///
+/// The RPC dispatcher if the actor has one registered, `None` otherwise
+pub fn get_dispatcher(actor_name: &str) -> Option<RpcDispatcher> {
+    SCHEMA_REGISTRY.read().ok().and_then(|r| {
+        r.as_ref()
+            .and_then(|m| m.get(actor_name).and_then(|entry| entry.dispatcher.clone()))
+    })
+}
+
+/// Check if an actor has a registered dispatcher.
+///
+/// # Arguments
+///
+/// * `actor_name` - The registered name of the actor
+///
+/// # Returns
+///
+/// `true` if the actor has a registered dispatcher, `false` otherwise
+pub fn has_dispatcher(actor_name: &str) -> bool {
+    SCHEMA_REGISTRY
+        .read()
+        .ok()
+        .and_then(|r| {
+            r.as_ref().map(|m| {
+                m.get(actor_name)
+                    .map_or(false, |entry| entry.dispatcher.is_some())
+            })
+        })
+        .unwrap_or(false)
 }
 
 /// Format a schema for display.

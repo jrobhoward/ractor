@@ -222,7 +222,7 @@ pub use port::RpcReplyPort;
 #[cfg(test)]
 use rand as _;
 #[cfg(feature = "shell-introspection")]
-pub use schema::{JsonDeserializeError, SchemaProvider};
+pub use schema::{JsonDeserializeError, RpcDispatcher, SchemaProvider};
 #[cfg(feature = "cluster")]
 pub use serialization::BytesConvertable;
 #[cfg(test)]
