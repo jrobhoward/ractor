@@ -84,23 +84,22 @@
   - Show peer connection status (connected/disconnected)
   - Show time since last heartbeat received
 
-- [ ] **Investigate raft_node behavior on node failure** (LIKELY RACTOR_CLUSTER BUG)
-  - **Observed**: When node_a was killed, local actors on node_c became unreachable
-  - **Symptoms**:
-    - Node_c process still running after node_a killed
-    - NodeServer still accepting connections
-    - But `call raft_node GetStatus {}` returns SendErr
-    - IntrospectionActor not found in registry
-  - **Debug logs show**:
-    - TCP session closed cleanly: `Node session node_a exited with 'tcp_session_closed'`
-    - No actor stop/fail events logged
-    - No panics or errors
-  - **Expected**: Local actors should survive remote node failures
-  - **Root cause**: Unknown - likely in ractor_cluster's NodeSession cleanup logic
-  - **Files to investigate**:
-    - `ractor_cluster/src/node/node_session.rs` - cleanup on disconnect
-    - `ractor_cluster/src/node/mod.rs` - NodeServer supervision handling
-  - **This is a ractor_cluster issue, not ractor_shell**
+- [x] **Investigate raft_node behavior on node failure** ✅ RESOLVED - NOT A BUG
+  - **Original Observation**: When node_a was killed, local actors on node_c became unreachable
+  - **Root Cause**: Cookie mismatch during manual testing
+    - The shell uses `secret_cookie` as its default cluster cookie
+    - Manual testing was using `--cookie test` for nodes
+    - Cookie mismatch causes authentication to fail silently
+    - Failed auth = no process group sync = "No introspection actor found"
+  - **Verified Behavior**:
+    - With matching cookies, cluster works correctly
+    - Local actors on surviving nodes remain fully operational after node failure
+    - `call raft_node GetStatus {}` works correctly after killing other nodes
+    - NodeSession cleanup logic is correct
+  - **Lesson**: Always use matching cookies (`secret_cookie` is the default)
+  - **Files reviewed**:
+    - `ractor_cluster/src/node/node_session.rs` - cleanup logic is correct
+    - `ractor_cluster/src/node.rs` - NodeServer supervision is correct
 
 ---
 
