@@ -2328,21 +2328,70 @@ impl ShellState {
             println!("  Discovering introspection actor...");
             let members = pg::get_members(&INTROSPECTION_GROUP.to_string());
 
-            let remote_introspection: Vec<ActorRef<ShellProtocolMessage>> = members
+            // Get IDs of introspection actors we've already stored
+            let known_actor_ids: std::collections::HashSet<_> = self
+                .connected_nodes
+                .values()
+                .map(|actor_ref| actor_ref.get_id())
+                .collect();
+
+            // Find remote introspection actors we haven't seen yet
+            let new_remote_introspection: Vec<ActorRef<ShellProtocolMessage>> = members
                 .into_iter()
                 .filter(|cell| !cell.get_id().is_local())
+                .filter(|cell| !known_actor_ids.contains(&cell.get_id()))
                 .map(ActorRef::<ShellProtocolMessage>::from)
                 .collect();
 
-            if remote_introspection.is_empty() {
-                return Err(ShellError::NoIntrospectionActor);
-            }
+            // If we found new actors, ping each to identify them
+            // If no new actors, we're connecting to a node in an already-connected cluster
+            let introspection_ref = if !new_remote_introspection.is_empty() {
+                // Ping each new actor to find one that responds
+                let mut found_ref = None;
+                for candidate in &new_remote_introspection {
+                    if let Ok(CallResult::Success(_pong)) = candidate
+                        .call(ShellProtocolMessage::Ping, Some(DEFAULT_RPC_TIMEOUT))
+                        .await
+                    {
+                        found_ref = Some(candidate.clone());
+                        break;
+                    }
+                }
+                found_ref.ok_or(ShellError::NoIntrospectionActor)?
+            } else {
+                // No new actors - this node is part of an already-connected cluster
+                // All introspection actors are already known, find one we haven't stored yet
+                let all_remote: Vec<ActorRef<ShellProtocolMessage>> =
+                    pg::get_members(&INTROSPECTION_GROUP.to_string())
+                        .into_iter()
+                        .filter(|cell| !cell.get_id().is_local())
+                        .filter(|cell| !known_actor_ids.contains(&cell.get_id()))
+                        .map(ActorRef::<ShellProtocolMessage>::from)
+                        .collect();
 
-            // For now, take the first remote introspection actor
-            // In a full implementation, we'd track which actor belongs to which node
-            let introspection_ref = remote_introspection[0].clone();
+                // Find an actor we haven't stored yet
+                let mut found_ref = None;
+                for candidate in &all_remote {
+                    if let Ok(CallResult::Success(_pong)) = candidate
+                        .call(ShellProtocolMessage::Ping, Some(DEFAULT_RPC_TIMEOUT))
+                        .await
+                    {
+                        found_ref = Some(candidate.clone());
+                        break;
+                    }
+                }
 
-            // Test with a ping
+                // If we still didn't find it, all nodes may already be connected
+                found_ref.ok_or_else(|| {
+                    ShellError::ClusterError(format!(
+                        "Could not identify introspection actor for {}. \
+                         This node may already be connected via another address.",
+                        host
+                    ))
+                })?
+            };
+
+            // Test with a ping and display result
             let pong_result = introspection_ref
                 .call(ShellProtocolMessage::Ping, Some(DEFAULT_RPC_TIMEOUT))
                 .await
