@@ -39,6 +39,9 @@
 //!
 //! ractor@local > call raft_node GetLeader {}
 //! "node2"
+//!
+//! ractor@local > call raft_node StepDown {}
+//! true  // Leader stepped down; false if not leader
 //! ```
 
 use std::collections::HashMap;
@@ -107,6 +110,10 @@ pub enum RaftMessage {
     /// Get list of known peer names
     #[rpc]
     GetPeers(RpcReplyPort<Vec<String>>),
+    /// Force the leader to step down (triggers new election)
+    /// Returns true if this node was the leader and stepped down
+    #[rpc]
+    StepDown(RpcReplyPort<bool>),
 }
 
 /// Status information returned by GetStatus RPC
@@ -436,6 +443,32 @@ impl Actor for RaftNode {
                     "RPC: GetPeers"
                 );
                 let _ = reply.send(state.peers.keys().cloned().collect());
+            }
+            RaftMessage::StepDown(reply) => {
+                if state.role == RaftRole::Leader {
+                    tracing::info!(
+                        node = %state.config.node_name,
+                        term = state.current_term,
+                        "Stepping down from leader role"
+                    );
+
+                    // Transition to follower
+                    state.role = RaftRole::Follower;
+                    state.current_leader = None;
+                    state.voted_for = None;
+
+                    // Schedule election timeout to allow new leader election
+                    Self::schedule_election_timeout(&myself, state);
+
+                    let _ = reply.send(true);
+                } else {
+                    tracing::debug!(
+                        node = %state.config.node_name,
+                        role = %state.role,
+                        "StepDown called but not leader"
+                    );
+                    let _ = reply.send(false);
+                }
             }
 
             // Ignore stale timer events (generation mismatch)

@@ -17,6 +17,7 @@
 #   call raft_node GetLeader {}  - Get current leader name
 #   call raft_node GetStatus {}  - Get full status
 #   call raft_node GetPeers {}   - List connected peers
+#   call raft_node StepDown {}   - Force leader to step down (triggers new election)
 #
 # Remote Tracing:
 #   trace remote 127.0.0.1:9001 *raft*  - Subscribe to raft events
@@ -76,6 +77,7 @@ print_usage() {
     echo "  GetLeader {}  - Get current leader name"
     echo "  GetStatus {}  - Get full node status"
     echo "  GetPeers {}   - List connected peers"
+    echo "  StepDown {}   - Force leader to step down (triggers election)"
     echo
     echo "Remote Tracing:"
     echo "  trace remote 127.0.0.1:9001 *raft*  - Subscribe to raft events"
@@ -305,6 +307,7 @@ if [ "$START_SHELL" = true ]; then
     echo -e "    ${GREEN}call raft_node GetLeader {}${NC}"
     echo -e "    ${GREEN}call raft_node GetStatus {}${NC}"
     echo -e "    ${GREEN}call raft_node GetPeers {}${NC}"
+    echo -e "    ${GREEN}call raft_node StepDown {}${NC}              # Force leader to step down"
     echo
     echo "  Check multiple nodes:"
     echo

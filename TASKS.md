@@ -69,10 +69,15 @@
   - File: `ractor_shell/src/tracing/filter.rs:220-241` (matches_any_field)
   - File: `ractor_shell/src/tracing/layer.rs:418-421` (filtering logic)
 
-- [ ] **Add command to trigger fresh leader election**
-  - New shell command: `raft election` or `raft stepdown`
-  - Forces current leader to step down, triggering new election
-  - Useful for observing election protocol in action
+- [x] **Add command to trigger fresh leader election** ✅ COMPLETE
+  - Added `StepDown(RpcReplyPort<bool>)` RPC to `RaftMessage` enum
+  - Use via generic call command: `call raft_node StepDown {}`
+  - Returns true if leader stepped down, false if not leader
+  - Works both locally and on remote nodes via typed RPC
+  - Updated `test_cluster.sh` help and quick commands with StepDown
+  - Updated `raft.rs` module documentation
+  - File: `ractor_shell/examples/cluster_demo/raft.rs` (StepDown handler)
+  - Note: No shell-specific `raft` command - uses generic `call` mechanism
 
 - [ ] **Add `raft status` command enhancements**
   - Show current term, voted_for, election generation
