@@ -327,6 +327,68 @@ fn parse_line___tree_with_actor___returns_tree_with_actor() {
     }
 }
 
+// ==================== parse_line: Supervtree Command ====================
+
+#[test]
+fn parse_line___supervtree_without_arg___returns_supervtree_with_none() {
+    let cmd = ShellCommand::parse_line("supervtree").unwrap();
+
+    match cmd {
+        ShellCommand::Supervtree { actor } => assert!(actor.is_none()),
+        _ => panic!("Expected Supervtree command"),
+    }
+}
+
+#[test]
+fn parse_line___supervtree_with_actor___returns_supervtree_with_actor() {
+    let cmd = ShellCommand::parse_line("supervtree my_actor").unwrap();
+
+    match cmd {
+        ShellCommand::Supervtree { actor } => assert_eq!(actor, Some("my_actor".to_string())),
+        _ => panic!("Expected Supervtree command"),
+    }
+}
+
+#[test]
+fn parse_line___supervtree_alias_st___returns_supervtree() {
+    let cmd = ShellCommand::parse_line("st").unwrap();
+
+    match cmd {
+        ShellCommand::Supervtree { actor } => assert!(actor.is_none()),
+        _ => panic!("Expected Supervtree command"),
+    }
+}
+
+// ==================== parse_line: Parent Command ====================
+
+#[test]
+fn parse_line___parent_with_actor___returns_parent_variant() {
+    let cmd = ShellCommand::parse_line("parent my_actor").unwrap();
+
+    match cmd {
+        ShellCommand::Parent { actor } => assert_eq!(actor, "my_actor"),
+        _ => panic!("Expected Parent command"),
+    }
+}
+
+#[test]
+fn parse_line___parent_without_arg___returns_error() {
+    let result = ShellCommand::parse_line("parent");
+
+    assert!(result.is_err());
+    assert!(result.unwrap_err().to_string().contains("parent"));
+}
+
+#[test]
+fn parse_line___parent_alias_p___returns_parent_variant() {
+    let cmd = ShellCommand::parse_line("p my_actor").unwrap();
+
+    match cmd {
+        ShellCommand::Parent { actor } => assert_eq!(actor, "my_actor"),
+        _ => panic!("Expected Parent command"),
+    }
+}
+
 // ==================== parse_line: File Commands ====================
 
 #[test]

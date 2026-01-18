@@ -327,6 +327,36 @@ impl Actor for IntrospectionActor {
                     }
                 }
             }
+
+            // ==================== Supervision Tree ====================
+            ShellProtocolMessage::GetSupervisionTree(actor_name, reply) => {
+                use crate::protocol::SupervisionTreeNode;
+
+                let tree_nodes = match actor_name {
+                    Some(name) => {
+                        // Build tree starting from specific actor
+                        if let Some(cell) = registry::where_is(name) {
+                            vec![SupervisionTreeNode::from_cell(&cell)]
+                        } else {
+                            vec![]
+                        }
+                    }
+                    None => {
+                        // Find all root actors (those without supervisors) and build trees
+                        build_supervision_tree_roots()
+                    }
+                };
+
+                let _ = reply.send(tree_nodes);
+            }
+
+            ShellProtocolMessage::GetActorParent(actor_name, reply) => {
+                let parent_info = registry::where_is(actor_name)
+                    .and_then(|cell| cell.try_get_supervisor())
+                    .map(|supervisor_cell| ActorInfo::from_cell(&supervisor_cell));
+
+                let _ = reply.send(parent_info);
+            }
         }
 
         Ok(())
@@ -567,4 +597,50 @@ fn build_cluster_topology(local_node_name: &str) -> ClusterTopology {
 /// Extract node ID from an actor ID string (e.g., "1.0" -> "1")
 fn extract_node_id(actor_id: &str) -> String {
     actor_id.split('.').next().unwrap_or("0").to_string()
+}
+
+/// Build supervision trees for all root actors (actors without supervisors)
+fn build_supervision_tree_roots() -> Vec<crate::protocol::SupervisionTreeNode> {
+    use std::collections::HashSet;
+
+    let mut all_actors = Vec::new();
+    let mut seen_ids = HashSet::new();
+
+    // Collect all actors from registry
+    for name in registry::registered() {
+        if let Some(cell) = registry::where_is(name) {
+            let id = cell.get_id();
+            if seen_ids.insert(id) {
+                all_actors.push(cell);
+            }
+        }
+    }
+
+    // Collect all actors from known process groups
+    let known_groups = [
+        "ping_pong",
+        "ractor_shell_introspection",
+        "demo_group",
+        "raft_cluster",
+    ];
+    for group in &known_groups {
+        for cell in pg::get_members(&group.to_string()) {
+            let id = cell.get_id();
+            if seen_ids.insert(id) {
+                all_actors.push(cell);
+            }
+        }
+    }
+
+    // Filter to only root actors (those without supervisors)
+    let roots: Vec<_> = all_actors
+        .iter()
+        .filter(|cell| cell.try_get_supervisor().is_none())
+        .collect();
+
+    // Build tree nodes for each root
+    roots
+        .iter()
+        .map(|cell| crate::protocol::SupervisionTreeNode::from_cell(cell))
+        .collect()
 }

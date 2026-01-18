@@ -4,21 +4,24 @@
 **Goal**: Rust-ractor counterpart for Erlang/OTP's shell & observer
 **Status**: Core features complete. Enhancements in progress.
 
+**Recent Completion**: Priority 1 (Supervision Tree Visualization) is now complete with full local and remote support! This includes `supervtree`, `parent`, and enhanced `info` commands.
+
 **Erlang/OTP Comparison**: See [Feature Comparison](#erlang-otp-feature-comparison) section.
 
 ---
 
-## Priority 1: Supervision Tree Visualization
+## Priority 1: Supervision Tree Visualization ✅ COMPLETE
 
 **Estimated Time**: 3-4 hours
 **Value**: HIGH - True Erlang Observer parity
 **Core Changes**: None needed - `get_children()` and `try_get_supervisor()` are already public on `ActorCell`!
 
-- [ ] **Add `supervtree` command for supervision tree display**
+- [x] **Add `supervtree` command for supervision tree display**
   - Use `ActorCell::get_children()` to walk the tree
   - Use `ActorCell::try_get_supervisor()` to find roots
   - ASCII tree visualization like `pstree`
   - Show: actor name, ID, status, child count
+  - Works both locally and remotely (via RPC)
   - Example output:
     ```
     supervisor (0.1) [Running]
@@ -34,13 +37,14 @@
   - Tab key to switch between actors list and tree view
   - Highlight selected actor's position in tree
 
-- [ ] **Add `parent <actor>` command**
+- [x] **Add `parent <actor>` command**
   - Show the supervisor of a given actor
   - Erlang equivalent: `process_info(Pid, links)`
+  - Works both locally and remotely (via RPC)
 
-- [ ] **Update `info <actor>` to show supervision info**
+- [x] **Update `info <actor>` to show supervision info**
   - Add "Supervisor: <name>" field
-  - Add "Children: N" field
+  - Add "Children: N" field with names listed
 
 ---
 
@@ -82,9 +86,14 @@ Currently, Raft messages are invisible in shell tracing because they're tunneled
   - IntrospectionActor collects same data as local `top`
   - Return: actor ID, name, status, process groups, first-seen time
 
-- [ ] **Add `GetSupervisionTree` protocol message**
+- [x] **Add `GetSupervisionTree` protocol message**
   - Returns tree structure for remote visualization
-  - Enable remote `supervtree` command
+  - Enables remote `supervtree` command
+  - Added `SupervisionTreeNode` serializable structure
+
+- [x] **Add `GetActorParent` protocol message**
+  - Returns parent/supervisor info for an actor
+  - Enables remote `parent` command
 
 - [ ] **Update `top` to work with remote context**
   - When `current_node` is set, fetch metrics via RPC
@@ -182,8 +191,9 @@ Currently, Raft messages are invisible in shell tracing because they're tunneled
   - Quick lookup of registered name to actor ID
   - Erlang equivalent: `whereis/1`
 
-- [ ] **Add `links <actor>` command**
-  - Show supervisor and children for an actor
+- [ ] **Add `links <actor>` command** (OPTIONAL - mostly covered by `supervtree` and `parent`)
+  - Show supervisor and children for an actor in one view
+  - Combines functionality from `parent` and `info` commands
   - Uses already-public `get_children()` and `try_get_supervisor()`
 
 - [ ] **Clarify `tree` vs `supervtree` naming**
@@ -252,7 +262,7 @@ These items need modifications to ractor core. Keep changes minimal.
 |---------|-------------|-------------------|--------|
 | Process listing | `actors`, `registry` | `processes()`, `registered()` | ✅ Implemented |
 | Process groups | `pg list`, `pg members` | `pg:get_members/1` | ✅ Implemented |
-| Basic info | `info` (ID, name, status) | `process_info/1` | ✅ Partial |
+| Basic info | `info` (ID, name, status, supervisor, children) | `process_info/1` | ✅ Implemented |
 | Stop/Kill | `stop` | `exit/2` | ✅ Implemented |
 | Remote connection | `connect`, `use` | `-remsh`, `net_adm:ping/1` | ✅ Implemented |
 | Cluster topology | `cluster` commands | `nodes()`, observer | ✅ Implemented |
@@ -260,7 +270,7 @@ These items need modifications to ractor core. Keep changes minimal.
 | Message sending | `send`, `call` | Direct calls | ✅ DynamicMessage only |
 | Top/Dashboard TUI | `top` | observer_cli | ✅ Phase 1 Complete |
 | Tracing | `trace`, `trace-to-file` | `dbg`, trace BIFs | ✅ Complete |
-| **Supervision trees** | `supervtree` | Observer supervision view | ⏳ **Priority 1** |
+| **Supervision trees** | `supervtree`, `parent` | Observer supervision view | ✅ **Complete** (local + remote) |
 | Message queue depth | - | `message_queue_len` | ❌ Needs core API |
 | Link inspection | `links` | `links`, `monitors` | ⏳ **Priority 8** |
 | Live refresh (simple) | `watch` | - | ⏳ Priority 5 |
@@ -270,7 +280,7 @@ These items need modifications to ractor core. Keep changes minimal.
 
 ## PR Checklist
 
-- [x] All tests pass: `cargo test --package ractor_shell` (152 tests)
+- [x] All tests pass: `cargo test --package ractor_shell` (137 tests)
 - [x] Clippy passes: `cargo clippy --package ractor_shell -- -D clippy::all -D warnings`
 - [x] Rustfmt passes: `cargo fmt --package ractor_shell -- --check`
 - [x] Documentation builds: `cargo doc --package ractor_shell --no-deps`

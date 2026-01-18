@@ -63,6 +63,8 @@ impl ShellHelper {
             "cluster",
             "stats",
             "tree",
+            "supervtree",
+            "parent",
             "monitor",
             "unmonitor",
             "monitors",
@@ -90,6 +92,8 @@ impl ShellHelper {
             ("t", "top"),
             ("tr", "trace"),
             ("tf", "trace-to-file"),
+            ("st", "supervtree"),
+            ("p", "parent"),
         ]
     }
 

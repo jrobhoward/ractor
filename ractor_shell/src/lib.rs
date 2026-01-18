@@ -214,6 +214,8 @@ impl ShellState {
             ShellCommand::Cluster { subcommand } => self.cmd_cluster(subcommand).await,
             ShellCommand::Stats => self.cmd_stats().await,
             ShellCommand::Tree { actor } => self.cmd_tree(actor).await,
+            ShellCommand::Supervtree { actor } => self.cmd_supervtree(actor).await,
+            ShellCommand::Parent { actor } => self.cmd_parent(actor).await,
             ShellCommand::SendFile { actor, file_path } => {
                 self.cmd_send_file(actor, file_path).await
             }
@@ -1136,6 +1138,31 @@ impl ShellState {
                 if let Some(name) = cell.get_name() {
                     println!("  Name:   {}", name);
                 }
+
+                // Show supervision information
+                match cell.try_get_supervisor() {
+                    Some(supervisor) => {
+                        let supervisor_name = supervisor
+                            .get_name()
+                            .unwrap_or_else(|| format!("{}", supervisor.get_id()));
+                        println!("  Supervisor: {}", supervisor_name.green());
+                    }
+                    None => {
+                        println!("  Supervisor: {}", "None (root actor)".bright_black());
+                    }
+                }
+
+                let children = cell.get_children();
+                println!("  Children: {}", children.len());
+                if !children.is_empty() {
+                    for child in children.iter() {
+                        let child_name = child
+                            .get_name()
+                            .unwrap_or_else(|| format!("{}", child.get_id()));
+                        println!("    - {}", child_name.cyan());
+                    }
+                }
+
                 Ok(())
             } else {
                 Err(ShellError::ActorNotFound(actor))
@@ -2577,6 +2604,279 @@ impl ShellState {
         Ok(())
     }
 
+    async fn cmd_supervtree(&self, actor: Option<String>) -> ShellResult<()> {
+        use ractor::ActorCell;
+
+        println!();
+        println!("{}", "Supervision Tree".bold().underline());
+        println!();
+
+        // Check if we're working with a remote node
+        if let Some(node_name) = &self.current_node {
+            if let Some(introspection_ref) = self.connected_nodes.get(node_name) {
+                let result = introspection_ref
+                    .call(
+                        |reply| ShellProtocolMessage::GetSupervisionTree(actor.clone(), reply),
+                        Some(DEFAULT_RPC_TIMEOUT),
+                    )
+                    .await
+                    .map_err(ShellError::messaging)?;
+
+                match result {
+                    CallResult::Success(tree_nodes) => {
+                        if tree_nodes.is_empty() {
+                            if let Some(ref name) = actor {
+                                return Err(ShellError::RemoteActorNotFound {
+                                    actor: name.clone(),
+                                    node: node_name.clone(),
+                                });
+                            } else {
+                                println!(
+                                    "{}",
+                                    "No root actors found on remote node.".bright_black()
+                                );
+                            }
+                        } else {
+                            for (i, tree_node) in tree_nodes.iter().enumerate() {
+                                let is_last = i == tree_nodes.len() - 1;
+                                self.print_supervision_subtree_remote(tree_node, "", is_last);
+                                if !is_last {
+                                    println!();
+                                }
+                            }
+                        }
+                    }
+                    CallResult::Timeout => return Err(ShellError::rpc_timeout()),
+                    CallResult::SenderError => return Err(ShellError::RpcSenderError),
+                }
+            } else {
+                return Err(ShellError::NodeNotConnected(node_name.clone()));
+            }
+        } else {
+            // Local query
+            if let Some(actor_name) = actor {
+                // Show tree starting from specific actor
+                if let Some(cell) = registry::where_is(actor_name.clone()) {
+                    self.print_supervision_subtree(&cell, "", true);
+                } else {
+                    return Err(ShellError::ActorNotFound(actor_name));
+                }
+            } else {
+                // Find and display all root actors (those without supervisors)
+                let all_actors = self.get_all_local_actors();
+                let roots: Vec<ActorCell> = all_actors
+                    .iter()
+                    .filter(|cell| cell.try_get_supervisor().is_none())
+                    .cloned()
+                    .collect();
+
+                if roots.is_empty() {
+                    println!("{}", "No root actors found.".bright_black());
+                } else {
+                    for (i, root) in roots.iter().enumerate() {
+                        let is_last = i == roots.len() - 1;
+                        self.print_supervision_subtree(root, "", is_last);
+                        if !is_last {
+                            println!();
+                        }
+                    }
+                }
+            }
+        }
+
+        println!();
+        Ok(())
+    }
+
+    async fn cmd_parent(&self, actor: String) -> ShellResult<()> {
+        // Check if we're working with a remote node
+        if let Some(node_name) = &self.current_node {
+            if let Some(introspection_ref) = self.connected_nodes.get(node_name) {
+                let result = introspection_ref
+                    .call(
+                        |reply| ShellProtocolMessage::GetActorParent(actor.clone(), reply),
+                        Some(DEFAULT_RPC_TIMEOUT),
+                    )
+                    .await
+                    .map_err(ShellError::messaging)?;
+
+                match result {
+                    CallResult::Success(parent_info) => {
+                        println!("{}", format!("Actor on {}: {}", node_name, actor).bold());
+                        match parent_info {
+                            Some(supervisor) => {
+                                let supervisor_name =
+                                    supervisor.name.unwrap_or_else(|| supervisor.id.to_string());
+                                println!(
+                                    "  Supervisor: {} {}",
+                                    supervisor_name.green(),
+                                    format!("({})", supervisor.id).bright_black()
+                                );
+                                println!("  Status:     {}", supervisor.status);
+                            }
+                            None => {
+                                println!(
+                                    "  {}",
+                                    "No supervisor (this is a root actor)".bright_black()
+                                );
+                            }
+                        }
+                    }
+                    CallResult::Timeout => return Err(ShellError::rpc_timeout()),
+                    CallResult::SenderError => return Err(ShellError::RpcSenderError),
+                }
+            } else {
+                return Err(ShellError::NodeNotConnected(node_name.clone()));
+            }
+        } else {
+            // Local query
+            if let Some(cell) = registry::where_is(actor.clone()) {
+                match cell.try_get_supervisor() {
+                    Some(supervisor) => {
+                        println!("{}", format!("Actor: {}", actor).bold());
+                        println!(
+                            "  Supervisor: {} {}",
+                            supervisor
+                                .get_name()
+                                .unwrap_or_else(|| "<unnamed>".to_string())
+                                .green(),
+                            format!("({})", supervisor.get_id()).bright_black()
+                        );
+                        println!("  Status:     {:?}", supervisor.get_status());
+                    }
+                    None => {
+                        println!("{}", format!("Actor: {}", actor).bold());
+                        println!(
+                            "  {}",
+                            "No supervisor (this is a root actor)".bright_black()
+                        );
+                    }
+                }
+            } else {
+                return Err(ShellError::ActorNotFound(actor));
+            }
+        }
+        Ok(())
+    }
+
+    /// Helper function to get all local actors from registry and process groups.
+    fn get_all_local_actors(&self) -> Vec<ractor::ActorCell> {
+        use std::collections::HashSet;
+
+        let mut actors = Vec::new();
+        let mut seen_ids = HashSet::new();
+
+        // Add registered actors
+        for name in registry::registered() {
+            if let Some(cell) = registry::where_is(name) {
+                let id = cell.get_id();
+                if seen_ids.insert(id) {
+                    actors.push(cell);
+                }
+            }
+        }
+
+        // Add actors from known process groups
+        for group in KNOWN_PROCESS_GROUPS {
+            for cell in pg::get_members(&group.to_string()) {
+                let id = cell.get_id();
+                if seen_ids.insert(id) {
+                    actors.push(cell);
+                }
+            }
+        }
+
+        actors
+    }
+
+    /// Recursively print a supervision tree starting from the given actor.
+    fn print_supervision_subtree(&self, cell: &ractor::ActorCell, prefix: &str, is_last: bool) {
+        let actor_name = cell.get_name().unwrap_or_else(|| "<unnamed>".to_string());
+        let actor_id = cell.get_id().to_string();
+        let status = format!("{:?}", cell.get_status());
+        let children = cell.get_children();
+        let child_count = children.len();
+
+        // Print current actor
+        let branch = if is_last { "└──" } else { "├──" };
+        let name_part = if child_count > 0 {
+            format!("{} [{}]", actor_name, child_count).green().bold()
+        } else {
+            actor_name.cyan()
+        };
+
+        println!(
+            "{}{} {} {} {}",
+            prefix.bright_cyan(),
+            branch.bright_cyan(),
+            name_part,
+            format!("({})", actor_id).bright_black(),
+            format!("[{}]", status).bright_black()
+        );
+
+        // Print children recursively
+        if !children.is_empty() {
+            let child_prefix = if is_last {
+                format!("{}    ", prefix)
+            } else {
+                format!("{}│   ", prefix)
+            };
+
+            for (i, child) in children.iter().enumerate() {
+                let is_last_child = i == children.len() - 1;
+                self.print_supervision_subtree(child, &child_prefix, is_last_child);
+            }
+        }
+    }
+
+    /// Recursively print a supervision tree from remote SupervisionTreeNode data.
+    fn print_supervision_subtree_remote(
+        &self,
+        node: &protocol::SupervisionTreeNode,
+        prefix: &str,
+        is_last: bool,
+    ) {
+        let actor_name = node
+            .actor
+            .name
+            .clone()
+            .unwrap_or_else(|| "<unnamed>".to_string());
+        let actor_id = &node.actor.id;
+        let status = &node.actor.status;
+        let child_count = node.child_count;
+
+        // Print current actor
+        let branch = if is_last { "└──" } else { "├──" };
+        let name_part = if child_count > 0 {
+            format!("{} [{}]", actor_name, child_count).green().bold()
+        } else {
+            actor_name.cyan()
+        };
+
+        println!(
+            "{}{} {} {} {}",
+            prefix.bright_cyan(),
+            branch.bright_cyan(),
+            name_part,
+            format!("({})", actor_id).bright_black(),
+            format!("[{}]", status).bright_black()
+        );
+
+        // Print children recursively
+        if !node.children.is_empty() {
+            let child_prefix = if is_last {
+                format!("{}    ", prefix)
+            } else {
+                format!("{}│   ", prefix)
+            };
+
+            for (i, child) in node.children.iter().enumerate() {
+                let is_last_child = i == node.children.len() - 1;
+                self.print_supervision_subtree_remote(child, &child_prefix, is_last_child);
+            }
+        }
+    }
+
     async fn cmd_monitor(&self, actor: String) -> ShellResult<()> {
         if let Some(monitor_ref) = &self.monitor_actor {
             monitor_ref
@@ -2661,8 +2961,12 @@ pub enum ShellCommand {
     Cluster { subcommand: Option<String> },
     /// Show system statistics
     Stats,
-    /// Show supervision tree (limited in Phase 1)
+    /// Show process group tree (limited in Phase 1)
     Tree { actor: Option<String> },
+    /// Show actual supervision tree with parent-child relationships. Alias: `st`. Usage: `supervtree [actor]`
+    Supervtree { actor: Option<String> },
+    /// Show the supervisor (parent) of an actor. Alias: `p`. Usage: `parent <actor>`
+    Parent { actor: String },
     /// Send a JSON file as a message. Alias: `sf`. Usage: `send-file <actor> <path>`
     SendFile { actor: String, file_path: String },
     /// Load and execute a script file. Alias: `l`. Usage: `load <path>`
@@ -2708,6 +3012,8 @@ impl ShellCommand {
             "tr" => "trace",
             "tf" => "trace-to-file",
             "sc" => "schema",
+            "st" => "supervtree",
+            "p" => "parent",
             _ => cmd,
         }
     }
@@ -2847,6 +3153,20 @@ impl ShellCommand {
             "tree" => Ok(ShellCommand::Tree {
                 actor: parts.get(1).map(|s| s.to_string()),
             }),
+            "supervtree" => Ok(ShellCommand::Supervtree {
+                actor: parts.get(1).map(|s| s.to_string()),
+            }),
+            "parent" => {
+                if parts.len() < 2 {
+                    return Err(ShellError::MissingArgument {
+                        command: "parent",
+                        requirement: "an actor name",
+                    });
+                }
+                Ok(ShellCommand::Parent {
+                    actor: parts[1].to_string(),
+                })
+            }
             "send-file" | "sendfile" => {
                 if parts.len() < 3 {
                     return Err(ShellError::MissingArgument {

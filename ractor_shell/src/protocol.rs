@@ -115,6 +115,15 @@ pub enum ShellProtocolMessage {
     /// Internal: Receive a trace event from the local tracing layer (cast message)
     /// This is not used by remote clients, only by the local tracing infrastructure
     TraceEventNotification(SerializableTraceEvent),
+
+    // ==================== Supervision Tree ====================
+    /// Get the supervision tree starting from an optional actor (None = all roots)
+    #[rpc]
+    GetSupervisionTree(Option<String>, RpcReplyPort<Vec<SupervisionTreeNode>>),
+
+    /// Get the parent (supervisor) of an actor
+    #[rpc]
+    GetActorParent(String, RpcReplyPort<Option<ActorInfo>>),
 }
 
 /// Result of a typed RPC call
@@ -186,6 +195,34 @@ impl ActorInfo {
             name: cell.get_name(),
             status: format!("{:?}", cell.get_status()),
             is_local: cell.get_id().is_local(),
+        }
+    }
+}
+
+/// Supervision tree node (serializable for remote queries)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SupervisionTreeNode {
+    /// Information about this actor
+    pub actor: ActorInfo,
+    /// Number of children
+    pub child_count: usize,
+    /// Child actors in the supervision tree
+    pub children: Vec<SupervisionTreeNode>,
+}
+
+impl SupervisionTreeNode {
+    /// Build a supervision tree starting from an ActorCell
+    pub fn from_cell(cell: &ractor::ActorCell) -> Self {
+        let children_cells = cell.get_children();
+        let children: Vec<SupervisionTreeNode> = children_cells
+            .iter()
+            .map(SupervisionTreeNode::from_cell)
+            .collect();
+
+        Self {
+            actor: ActorInfo::from_cell(cell),
+            child_count: children.len(),
+            children,
         }
     }
 }
