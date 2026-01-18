@@ -23,18 +23,15 @@ fn schema_provider___message_schema___returns_valid_json() {
 }
 
 #[test]
-fn schema_provider___from_json_cast_variant___deserializes_correctly() {
-    // StopActor is the only non-RPC (cast) variant
+fn schema_provider___from_json_stop_actor___returns_error_as_rpc() {
+    // StopActor is now an RPC variant (has RpcReplyPort), so from_json should return error
     let json = serde_json::json!({"0": "test_actor"});
-    let msg =
-        ShellProtocolMessage::from_json("StopActor", json).expect("Should deserialize StopActor");
-
-    match msg {
-        ShellProtocolMessage::StopActor(name) => {
-            assert_eq!(name, "test_actor");
-        }
-        _ => panic!("Expected StopActor variant"),
-    }
+    let result = ShellProtocolMessage::from_json("StopActor", json);
+    assert!(result.is_err(), "RPC variants should return error");
+    assert!(
+        result.unwrap_err().message.contains("RPC variant"),
+        "Error should mention RPC variant"
+    );
 }
 
 #[test]
@@ -58,9 +55,21 @@ fn schema_provider___from_json_unknown_variant___returns_error() {
 
 #[test]
 fn schema_provider___to_json___serializes_cast_variant() {
-    let msg = ShellProtocolMessage::StopActor("my_actor".to_string());
+    // TraceEventNotification is the only non-RPC (cast) variant left
+    let event = SerializableTraceEvent {
+        timestamp: "2024-01-01T00:00:00Z".to_string(),
+        actor_id: Some("0.1".to_string()),
+        actor_name: Some("test_actor".to_string()),
+        event_type: "Event".to_string(),
+        level: "INFO".to_string(),
+        target: "test".to_string(),
+        message: "test message".to_string(),
+        fields: vec![],
+    };
+    let msg = ShellProtocolMessage::TraceEventNotification(event);
     let json = msg.to_json();
 
-    assert_eq!(json.get("variant").unwrap(), "StopActor");
-    assert_eq!(json.get("0").unwrap(), "my_actor");
+    assert_eq!(json.get("variant").unwrap(), "TraceEventNotification");
+    // The event is serialized as field "0"
+    assert!(json.get("0").is_some(), "Should have event as field 0");
 }

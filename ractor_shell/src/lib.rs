@@ -2220,17 +2220,33 @@ impl ShellState {
         // Check if we're working with a remote node
         if let Some(node_name) = &self.current_node {
             if let Some(introspection_ref) = self.connected_nodes.get(node_name) {
-                introspection_ref
-                    .cast(ShellProtocolMessage::StopActor(actor.clone()))
+                let result = introspection_ref
+                    .call(
+                        |reply| ShellProtocolMessage::StopActor(actor.clone(), reply),
+                        Some(DEFAULT_RPC_TIMEOUT),
+                    )
+                    .await
                     .map_err(ShellError::messaging)?;
 
-                println!(
-                    "{} Sent stop signal to '{}' on {}",
-                    "✓".green(),
-                    actor,
-                    node_name
-                );
-                return Ok(());
+                match result {
+                    CallResult::Success(true) => {
+                        println!(
+                            "{} Sent stop signal to '{}' on {}",
+                            "✓".green(),
+                            actor,
+                            node_name
+                        );
+                        return Ok(());
+                    }
+                    CallResult::Success(false) => {
+                        return Err(ShellError::RemoteActorNotFound {
+                            actor,
+                            node: node_name.clone(),
+                        });
+                    }
+                    CallResult::Timeout => return Err(ShellError::rpc_timeout()),
+                    CallResult::SenderError => return Err(ShellError::RpcSenderError),
+                }
             } else {
                 return Err(ShellError::NodeNotConnected(node_name.clone()));
             }

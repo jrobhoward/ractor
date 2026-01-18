@@ -192,10 +192,14 @@ impl Actor for IntrospectionActor {
                 let _ = reply.send(info);
             }
 
-            ShellProtocolMessage::StopActor(name) => {
-                if let Some(cell) = registry::where_is(name) {
+            ShellProtocolMessage::StopActor(name, reply) => {
+                let found = if let Some(cell) = registry::where_is(name) {
                     cell.stop(Some("Stopped by remote shell".to_string()));
-                }
+                    true
+                } else {
+                    false
+                };
+                let _ = reply.send(found);
             }
 
             ShellProtocolMessage::Ping(reply) => {

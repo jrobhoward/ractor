@@ -4,7 +4,7 @@
 **Goal**: Rust-ractor counterpart for Erlang/OTP's shell & observer
 **Status**: Core features complete. Enhancements in progress.
 
-**Recent Completion**: Priority 1 (Supervision Tree Visualization) is now complete with full local and remote support! This includes `supervtree`, `parent`, and enhanced `info` commands.
+**Recent Completion**: Remote `stop` and `pg list` commands now work! The `stop` command properly reports errors when an actor is not found on the remote node.
 
 **Erlang/OTP Comparison**: See [Feature Comparison](#erlang-otp-feature-comparison) section.
 
@@ -119,19 +119,21 @@
 - [x] `supervtree` - Shows supervision tree from remote node
 - [x] `parent` - Shows parent from remote node
 - [x] `pg members` - Lists process group members from remote node
+- [x] `pg list` - Lists all process groups on remote node
+- [x] `stop` - Stops an actor on remote node (with proper error reporting)
 
 ### Need Remote Support:
 
-- [ ] **Add remote `stop` command**
-  - Add `StopActor(String, RpcReplyPort<Result<(), String>>)` to protocol
+- [x] **Add remote `stop` command** ✅ COMPLETE
+  - Added `StopActor(String, RpcReplyPort<bool>)` to protocol
   - IntrospectionActor calls `registry::where_is()` then `cell.stop()`
-  - Return success/failure to caller
-  - ~30 minutes
+  - Returns true if actor found and stopped, false if not found
+  - Shell reports proper error when actor not found
 
-- [ ] **Add remote `pg list` command**
-  - Add `ListProcessGroups(RpcReplyPort<Vec<String>>)` to protocol
+- [x] **Add remote `pg list` command** ✅ COMPLETE
+  - Added `ListProcessGroups(RpcReplyPort<Vec<String>>)` to protocol
   - IntrospectionActor calls `pg::which_groups()`
-  - ~30 minutes
+  - Shell displays list of all process groups on remote node
 
 - [ ] **Add remote `tree` command** (process group tree)
   - Add `GetProcessGroupTree(RpcReplyPort<...>)` to protocol
@@ -381,7 +383,7 @@ These items need modifications to ractor core. Keep changes minimal.
 
 ## PR Checklist
 
-- [x] All tests pass: `cargo test --package ractor_shell` (137 tests)
+- [x] All tests pass: `cargo test --package ractor_shell` (199 tests)
 - [x] Clippy passes: `cargo clippy --package ractor_shell -- -D clippy::all -D warnings`
 - [x] Rustfmt passes: `cargo fmt --package ractor_shell -- --check`
 - [x] Documentation builds: `cargo doc --package ractor_shell --no-deps`

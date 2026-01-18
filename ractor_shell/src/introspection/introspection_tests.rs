@@ -755,11 +755,19 @@ async fn IntrospectionActor___stop_actor___stops_registered_actor() {
     );
 
     // Stop the actor via introspection
-    let result = introspection_ref.cast(ShellProtocolMessage::StopActor(
-        "stop_test_actor".to_string(),
-    ));
+    let result = introspection_ref
+        .call(
+            |reply| ShellProtocolMessage::StopActor("stop_test_actor".to_string(), reply),
+            Some(DEFAULT_RPC_TIMEOUT),
+        )
+        .await;
 
-    assert!(result.is_ok(), "Cast should succeed");
+    match result {
+        Ok(ractor::rpc::CallResult::Success(true)) => {
+            // Expected - actor was found and stopped
+        }
+        other => panic!("Expected Success(true), got {:?}", other),
+    }
 
     // Wait for the actor to stop
     let _ = test_handle.await;
@@ -769,6 +777,39 @@ async fn IntrospectionActor___stop_actor___stops_registered_actor() {
         ractor::registry::where_is("stop_test_actor".to_string()).is_none(),
         "Actor should be removed from registry after stop"
     );
+
+    introspection_ref.stop(None);
+}
+
+#[tokio::test]
+async fn IntrospectionActor___stop_actor___returns_false_for_nonexistent() {
+    let args = IntrospectionArgs {
+        node_name: "stop_nonexistent_test_node".to_string(),
+        tracing_handle: None,
+    };
+
+    let (introspection_ref, _handle) = Actor::spawn(
+        Some("stop_nonexistent_test_introspection".to_string()),
+        IntrospectionActor,
+        args,
+    )
+    .await
+    .expect("Failed to spawn IntrospectionActor");
+
+    // Try to stop a nonexistent actor
+    let result = introspection_ref
+        .call(
+            |reply| ShellProtocolMessage::StopActor("nonexistent_actor_xyz_789".to_string(), reply),
+            Some(DEFAULT_RPC_TIMEOUT),
+        )
+        .await;
+
+    match result {
+        Ok(ractor::rpc::CallResult::Success(false)) => {
+            // Expected - actor was not found
+        }
+        other => panic!("Expected Success(false), got {:?}", other),
+    }
 
     introspection_ref.stop(None);
 }

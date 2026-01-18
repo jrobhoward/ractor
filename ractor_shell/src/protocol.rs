@@ -65,8 +65,9 @@ pub enum ShellProtocolMessage {
     #[rpc]
     GetActorInfo(String, RpcReplyPort<Option<ActorInfo>>),
 
-    /// Stop an actor by name
-    StopActor(String),
+    /// Stop an actor by name (returns true if actor was found and stop signal sent)
+    #[rpc]
+    StopActor(String, RpcReplyPort<bool>),
 
     /// Ping to check connectivity
     #[rpc]
