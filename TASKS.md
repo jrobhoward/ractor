@@ -231,9 +231,11 @@
 - [ ] **Enhance `nodes` command with connection stats**
   - Show connection duration, last activity, connection state
 
-- [ ] **Add `ping <node>` command**
+- [x] **Add `ping <node>` command** ✅ COMPLETE
   - Explicit latency measurement to remote node
   - Erlang equivalent: `net_adm:ping/1`
+  - Auto-connects if not already connected
+  - Uses ShellProtocolMessage::Ping to measure round-trip time
 
 - [ ] **Add `netstat` command for cluster connections**
   - Show bytes sent/received, pending message counts

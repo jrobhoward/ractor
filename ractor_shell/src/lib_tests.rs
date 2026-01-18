@@ -613,3 +613,23 @@ fn should_display_level___error_event_with_error_min___returns_true() {
 fn should_display_level___info_event_with_error_min___returns_false() {
     assert!(!should_display_level(&MinLevel::Info, &MinLevel::Error));
 }
+
+// ==================== parse_line: Ping Command ====================
+
+#[test]
+fn parse_line___ping_with_node___returns_ping_variant() {
+    let cmd = ShellCommand::parse_line("ping 127.0.0.1:9001").unwrap();
+
+    match cmd {
+        ShellCommand::Ping { node } => assert_eq!(node, "127.0.0.1:9001"),
+        _ => panic!("Expected Ping variant"),
+    }
+}
+
+#[test]
+fn parse_line___ping_without_arg___returns_error() {
+    let result = ShellCommand::parse_line("ping");
+
+    assert!(result.is_err());
+    assert!(result.unwrap_err().to_string().contains("requires"));
+}

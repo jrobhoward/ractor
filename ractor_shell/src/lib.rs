@@ -259,6 +259,7 @@ impl ShellState {
             }
             ShellCommand::TraceRemoteOff => self.cmd_trace_remote_off().await,
             ShellCommand::Schema { actor } => self.cmd_schema(actor).await,
+            ShellCommand::Ping { node } => self.cmd_ping(node).await,
         }
     }
 
@@ -884,6 +885,17 @@ impl ShellState {
                     println!("  Events are polled periodically from the remote node.");
                     println!("  If buffer overflows, dropped count is reported.");
                 }
+                "ping" => {
+                    println!("{}", "ping <node>".green().bold());
+                    println!("  Ping a remote node to measure round-trip latency");
+                    println!("\n{}", "Usage:".bold());
+                    println!("  ping <host:port>");
+                    println!("\n{}", "Examples:".bold());
+                    println!("  ping 127.0.0.1:9001");
+                    println!("\n{}", "Note:".bold());
+                    println!("  Auto-connects if not already connected to the node.");
+                    println!("  Returns latency in milliseconds.");
+                }
                 _ => {
                     println!("{} Unknown command: {}", "Error:".red().bold(), cmd);
                 }
@@ -921,6 +933,10 @@ impl ShellState {
             println!("  {} Disconnect from node", "disconnect <node>".green());
             println!("  {}             List connected nodes", "nodes".green());
             println!("  {}       Switch to a node context", "use <node>".green());
+            println!(
+                "  {}       Ping node and measure latency",
+                "ping <node>".green()
+            );
             println!();
             println!("{}", "  Cluster Topology:".bright_black());
             println!("  {}          Show cluster topology", "cluster".green());
@@ -2753,6 +2769,50 @@ impl ShellState {
         Ok(())
     }
 
+    /// Ping a remote node to measure latency.
+    async fn cmd_ping(&mut self, node: String) -> ShellResult<()> {
+        use std::time::Instant;
+
+        // First, ensure we're connected to the node
+        let introspection_ref = if let Some(existing_ref) = self.connected_nodes.get(&node) {
+            existing_ref.clone()
+        } else {
+            // Auto-connect if not already connected
+            println!("{} Connecting to {}...", "→".bright_black(), node.cyan());
+            self.cmd_connect(node.clone()).await?;
+
+            // Get the reference after connection
+            self.connected_nodes
+                .get(&node)
+                .ok_or_else(|| ShellError::NodeNotConnected(node.clone()))?
+                .clone()
+        };
+
+        // Measure round-trip time
+        let start = Instant::now();
+        let result = introspection_ref
+            .call(ShellProtocolMessage::Ping, Some(DEFAULT_RPC_TIMEOUT))
+            .await
+            .map_err(ShellError::messaging)?;
+
+        let elapsed = start.elapsed();
+
+        match result {
+            CallResult::Success(response) => {
+                let latency_ms = elapsed.as_secs_f64() * 1000.0;
+                println!("{} {} ({:.2}ms)", "✓".green(), response.green(), latency_ms);
+            }
+            CallResult::Timeout => {
+                println!("{} Ping timeout after {:?}", "✗".red(), DEFAULT_RPC_TIMEOUT);
+            }
+            CallResult::SenderError => {
+                println!("{} Ping failed: node unreachable", "✗".red());
+            }
+        }
+
+        Ok(())
+    }
+
     async fn cmd_tree(&self, _actor: Option<String>) -> ShellResult<()> {
         println!();
         println!("{}", "Process Group Tree".bold().underline());
@@ -3454,6 +3514,8 @@ pub enum ShellCommand {
     TraceRemoteOff,
     /// Show message schema for an actor. Alias: `sc`. Usage: `schema <actor>` or `schema` to list all
     Schema { actor: Option<String> },
+    /// Ping a remote node to measure latency. Usage: `ping <node>`
+    Ping { node: String },
 }
 
 impl ShellCommand {
@@ -3723,6 +3785,17 @@ impl ShellCommand {
             "schema" => Ok(ShellCommand::Schema {
                 actor: parts.get(1).map(|s| s.to_string()),
             }),
+            "ping" => {
+                if parts.len() < 2 {
+                    return Err(ShellError::MissingArgument {
+                        command: "ping",
+                        requirement: "<node> (e.g., 127.0.0.1:9001)",
+                    });
+                }
+                Ok(ShellCommand::Ping {
+                    node: parts[1].to_string(),
+                })
+            }
             _ => Err(ShellError::UnknownCommand(parts[0].to_string())),
         }
     }
