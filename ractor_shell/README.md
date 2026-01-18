@@ -196,10 +196,17 @@ The Raft implementation uses:
 | `cluster groups` | | Show process groups across cluster |
 | `cluster actors` | | Show all actors across cluster |
 | `stats` | | Show system statistics |
-| `tree` | `t` | Show process group tree |
+| `tree` | | Show process group tree |
 | `monitor <actor>` | `m` | Start monitoring actor events |
 | `unmonitor <actor>` | `um` | Stop monitoring an actor |
 | `monitors` | `ms` | List monitored actors |
+| `top` | `t` | Launch interactive TUI dashboard |
+| `trace [pattern]` | `tr` | Start tracing actors matching pattern |
+| `trace off` | | Stop all tracing |
+| `trace-to-file <path> [pattern]` | `tf` | Log traces to file |
+| `trace remote <node> <pattern>` | | Start tracing on remote node |
+| `trace remote off` | | Stop remote tracing |
+| `schema <actor>` | `sc` | Show actor message schema |
 | `exit` / `quit` | `q` | Exit shell |
 
 ## Features
@@ -221,6 +228,10 @@ Use short forms for faster typing:
 - `s <actor> <msg>` → `send <actor> <msg>`
 - `c <actor> <msg>` → `call <actor> <msg>`
 - `con <addr>` → `connect <addr>`
+- `t` → `top`
+- `tr <pattern>` → `trace <pattern>`
+- `tf <path>` → `trace-to-file <path>`
+- `sc <actor>` → `schema <actor>`
 
 ### Dynamic Messages
 

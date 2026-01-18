@@ -418,9 +418,15 @@ ractor@local > call my_actor {"command": "get_value"}
 ### Current Limitations
 
 - Only shows named/registered actors (not all actors in system)
-- Process groups shown instead of full supervision trees
+- No actor metrics (message count, precise uptime) - would require ractor core changes
 
 See `ractor_shell/README.md` for complete documentation.
+
+### Key Technical Notes
+
+- **Supervision tree APIs are available**: `ActorCell::get_children()` and `ActorCell::try_get_supervisor()` are public - no core changes needed to visualize supervision trees
+- **Raft implementation is example code**: Located in `ractor_shell/examples/cluster_demo/raft.rs`, not in the main library
+- **Current priorities**: See `TASKS.md` for the prioritized task list
 
 **Important**: When working on ractor_shell, follow the conventions in:
 - `ractor_shell/SKILLS.md` - Development best practices (error handling, git workflow, code organization)
