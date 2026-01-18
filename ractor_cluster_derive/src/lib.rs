@@ -954,7 +954,7 @@ fn impl_dispatcher_module(
             pub async fn dispatch_rpc(
                 cell: ractor::ActorCell,
                 variant: String,
-                _args: serde_json::Value,
+                args: serde_json::Value,
             ) -> Result<serde_json::Value, String> {
                 let actor_ref: ractor::ActorRef<#message_type> = ractor::ActorRef::from(cell);
                 let timeout = Some(std::time::Duration::from_secs(5));
@@ -992,41 +992,83 @@ fn impl_dispatcher_arm(message_type: &Ident, variant: &Variant) -> syn::Result<i
         }
     };
 
-    // For now, only support RPCs with just a reply port (no arguments)
-    // Future enhancement: parse args from JSON for variants with multiple fields
-    if fields.len() > 1 {
-        // This RPC has arguments before the reply port - skip dispatcher generation
-        // The shell will get an "unknown variant" error, but schema introspection still works
-        return Ok(quote! {
-            #variant_name_str => {
-                Err(format!(
-                    "RPC '{}' requires arguments. Argument parsing is not yet implemented. \
-                     This RPC can be called through DynamicMessage or application-specific handlers.",
-                    #variant_name_str
-                ))
-            }
-        });
-    }
+    // Number of argument fields (excluding the last field which is RpcReplyPort)
+    let arg_count = fields.len() - 1;
 
-    // Single-field RPC: just the reply port
-    Ok(quote! {
-        #variant_name_str => {
-            match actor_ref.call(
-                |reply_port| #message_type::#variant_name(reply_port),
-                timeout
-            ).await {
-                Ok(ractor::rpc::CallResult::Success(result)) => {
-                    serde_json::to_value(&result)
-                        .map_err(|e| format!("Serialization failed: {}", e))
+    if arg_count == 0 {
+        // Single-field RPC: just the reply port
+        Ok(quote! {
+            #variant_name_str => {
+                match actor_ref.call(
+                    |reply_port| #message_type::#variant_name(reply_port),
+                    timeout
+                ).await {
+                    Ok(ractor::rpc::CallResult::Success(result)) => {
+                        serde_json::to_value(&result)
+                            .map_err(|e| format!("Serialization failed: {}", e))
+                    }
+                    Ok(ractor::rpc::CallResult::Timeout) => {
+                        Err("RPC timeout".to_string())
+                    }
+                    Ok(ractor::rpc::CallResult::SenderError) => {
+                        Err("Actor stopped or unreachable".to_string())
+                    }
+                    Err(e) => Err(format!("RPC failed: {:?}", e))
                 }
-                Ok(ractor::rpc::CallResult::Timeout) => {
-                    Err("RPC timeout".to_string())
-                }
-                Ok(ractor::rpc::CallResult::SenderError) => {
-                    Err("Actor stopped or unreachable".to_string())
-                }
-                Err(e) => Err(format!("RPC failed: {:?}", e))
             }
-        }
-    })
+        })
+    } else {
+        // RPC with arguments: extract fields from JSON, then call
+        let field_extractions: Vec<_> = fields
+            .iter()
+            .take(arg_count)
+            .enumerate()
+            .map(|(i, field)| {
+                let field_name = format_ident!("arg{}", i);
+                let field_idx = i.to_string();
+                let field_type = &field.ty;
+                generate_dispatcher_field_extraction(&field_name, &field_idx, field_type)
+            })
+            .collect();
+
+        let field_names: Vec<_> = (0..arg_count).map(|i| format_ident!("arg{}", i)).collect();
+
+        Ok(quote! {
+            #variant_name_str => {
+                #( #field_extractions )*
+                match actor_ref.call(
+                    |reply_port| #message_type::#variant_name(#( #field_names, )* reply_port),
+                    timeout
+                ).await {
+                    Ok(ractor::rpc::CallResult::Success(result)) => {
+                        serde_json::to_value(&result)
+                            .map_err(|e| format!("Serialization failed: {}", e))
+                    }
+                    Ok(ractor::rpc::CallResult::Timeout) => {
+                        Err("RPC timeout".to_string())
+                    }
+                    Ok(ractor::rpc::CallResult::SenderError) => {
+                        Err("Actor stopped or unreachable".to_string())
+                    }
+                    Err(e) => Err(format!("RPC failed: {:?}", e))
+                }
+            }
+        })
+    }
+}
+
+/// Generate field extraction code for dispatcher (returns String errors).
+fn generate_dispatcher_field_extraction(
+    field_name: &Ident,
+    field_key: &str,
+    field_type: &syn::Type,
+) -> impl ToTokens {
+    quote! {
+        let #field_name: #field_type = {
+            let value = args.get(#field_key)
+                .ok_or_else(|| format!("Missing required field '{}'", #field_key))?;
+            serde_json::from_value(value.clone())
+                .map_err(|e| format!("Invalid field '{}': {}", #field_key, e))?
+        };
+    }
 }

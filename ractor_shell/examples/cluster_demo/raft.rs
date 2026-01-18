@@ -114,6 +114,10 @@ pub enum RaftMessage {
     /// Returns true if this node was the leader and stepped down
     #[rpc]
     StepDown(RpcReplyPort<bool>),
+    /// Check if a given node name is a known peer
+    /// Example: call raft_node IsPeer {"0": "node_b"}
+    #[rpc]
+    IsPeer(String, RpcReplyPort<bool>),
 }
 
 /// Status information returned by GetStatus RPC
@@ -469,6 +473,10 @@ impl Actor for RaftNode {
                     );
                     let _ = reply.send(false);
                 }
+            }
+            RaftMessage::IsPeer(peer_name, reply) => {
+                let is_peer = state.peers.contains_key(&peer_name);
+                let _ = reply.send(is_peer);
             }
 
             // Ignore stale timer events (generation mismatch)

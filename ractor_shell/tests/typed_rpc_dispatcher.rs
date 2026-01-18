@@ -9,11 +9,22 @@ use serde::{Deserialize, Serialize};
 #[derive(RactorClusterMessage, Debug)]
 #[ractor_shell]
 pub enum TestMessage {
+    // RPCs without arguments
     #[rpc]
     GetValue(RpcReplyPort<i32>),
 
     #[rpc]
     GetStatus(RpcReplyPort<TestStatus>),
+
+    // RPCs with arguments
+    #[rpc]
+    SetValue(i32, RpcReplyPort<bool>),
+
+    #[rpc]
+    AddAmount(i32, RpcReplyPort<i32>),
+
+    #[rpc]
+    CompareAndSet(i32, i32, RpcReplyPort<bool>),
 
     Ping,
 }
@@ -58,6 +69,22 @@ impl Actor for TestActor {
                     count: *state,
                 };
                 let _ = reply.send(status);
+            }
+            TestMessage::SetValue(value, reply) => {
+                *state = value;
+                let _ = reply.send(true);
+            }
+            TestMessage::AddAmount(amount, reply) => {
+                *state += amount;
+                let _ = reply.send(*state);
+            }
+            TestMessage::CompareAndSet(expected, new_value, reply) => {
+                if *state == expected {
+                    *state = new_value;
+                    let _ = reply.send(true);
+                } else {
+                    let _ = reply.send(false);
+                }
             }
             TestMessage::Ping => {}
         }
@@ -158,4 +185,156 @@ fn SchemaProvider___dispatcher_method___returns_some_for_rpc_variants() {
     let dispatcher = TestMessage::dispatcher();
 
     assert!(dispatcher.is_some());
+}
+
+// ==================== Tests for RPCs with Arguments ==================== //
+
+#[tokio::test]
+async fn dispatcher___set_value_with_arg___updates_state_and_returns_true() {
+    let (actor_ref, _handle) = Actor::spawn(Some("test_dispatcher_6".to_string()), TestActor, ())
+        .await
+        .unwrap();
+
+    let dispatcher = schema_registry::get_dispatcher("test_dispatcher_6").unwrap();
+    let result = dispatcher(
+        actor_ref.get_cell(),
+        "SetValue".to_string(),
+        serde_json::json!({"0": 100}),
+    )
+    .await;
+
+    assert!(result.is_ok());
+    assert_eq!(result.unwrap(), serde_json::json!(true));
+
+    // Verify state was updated
+    let get_result = dispatcher(
+        actor_ref.get_cell(),
+        "GetValue".to_string(),
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(get_result.unwrap(), serde_json::json!(100));
+
+    actor_ref.stop(None);
+}
+
+#[tokio::test]
+async fn dispatcher___add_amount_with_arg___returns_new_total() {
+    let (actor_ref, _handle) = Actor::spawn(Some("test_dispatcher_7".to_string()), TestActor, ())
+        .await
+        .unwrap();
+
+    // Initial value is 42
+    let dispatcher = schema_registry::get_dispatcher("test_dispatcher_7").unwrap();
+    let result = dispatcher(
+        actor_ref.get_cell(),
+        "AddAmount".to_string(),
+        serde_json::json!({"0": 8}),
+    )
+    .await;
+
+    assert!(result.is_ok());
+    assert_eq!(result.unwrap(), serde_json::json!(50)); // 42 + 8 = 50
+
+    actor_ref.stop(None);
+}
+
+#[tokio::test]
+async fn dispatcher___compare_and_set_with_two_args___success_case() {
+    let (actor_ref, _handle) = Actor::spawn(Some("test_dispatcher_8".to_string()), TestActor, ())
+        .await
+        .unwrap();
+
+    // Initial value is 42, try to CAS 42 -> 99
+    let dispatcher = schema_registry::get_dispatcher("test_dispatcher_8").unwrap();
+    let result = dispatcher(
+        actor_ref.get_cell(),
+        "CompareAndSet".to_string(),
+        serde_json::json!({"0": 42, "1": 99}),
+    )
+    .await;
+
+    assert!(result.is_ok());
+    assert_eq!(result.unwrap(), serde_json::json!(true));
+
+    // Verify state was updated
+    let get_result = dispatcher(
+        actor_ref.get_cell(),
+        "GetValue".to_string(),
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(get_result.unwrap(), serde_json::json!(99));
+
+    actor_ref.stop(None);
+}
+
+#[tokio::test]
+async fn dispatcher___compare_and_set_with_two_args___failure_case() {
+    let (actor_ref, _handle) = Actor::spawn(Some("test_dispatcher_9".to_string()), TestActor, ())
+        .await
+        .unwrap();
+
+    // Initial value is 42, try to CAS 0 -> 99 (should fail)
+    let dispatcher = schema_registry::get_dispatcher("test_dispatcher_9").unwrap();
+    let result = dispatcher(
+        actor_ref.get_cell(),
+        "CompareAndSet".to_string(),
+        serde_json::json!({"0": 0, "1": 99}),
+    )
+    .await;
+
+    assert!(result.is_ok());
+    assert_eq!(result.unwrap(), serde_json::json!(false)); // CAS failed
+
+    // Verify state was NOT updated
+    let get_result = dispatcher(
+        actor_ref.get_cell(),
+        "GetValue".to_string(),
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(get_result.unwrap(), serde_json::json!(42)); // Still original value
+
+    actor_ref.stop(None);
+}
+
+#[tokio::test]
+async fn dispatcher___rpc_with_missing_arg___returns_error() {
+    let (actor_ref, _handle) = Actor::spawn(Some("test_dispatcher_10".to_string()), TestActor, ())
+        .await
+        .unwrap();
+
+    let dispatcher = schema_registry::get_dispatcher("test_dispatcher_10").unwrap();
+    let result = dispatcher(
+        actor_ref.get_cell(),
+        "SetValue".to_string(),
+        serde_json::json!({}), // Missing required field "0"
+    )
+    .await;
+
+    assert!(result.is_err());
+    assert!(result.unwrap_err().contains("Missing required field"));
+
+    actor_ref.stop(None);
+}
+
+#[tokio::test]
+async fn dispatcher___rpc_with_wrong_type_arg___returns_error() {
+    let (actor_ref, _handle) = Actor::spawn(Some("test_dispatcher_11".to_string()), TestActor, ())
+        .await
+        .unwrap();
+
+    let dispatcher = schema_registry::get_dispatcher("test_dispatcher_11").unwrap();
+    let result = dispatcher(
+        actor_ref.get_cell(),
+        "SetValue".to_string(),
+        serde_json::json!({"0": "not_a_number"}), // String instead of i32
+    )
+    .await;
+
+    assert!(result.is_err());
+    assert!(result.unwrap_err().contains("Invalid field"));
+
+    actor_ref.stop(None);
 }

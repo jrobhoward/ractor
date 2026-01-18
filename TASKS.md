@@ -292,7 +292,7 @@
 
 ---
 
-## Priority 10: Schema-Based Generic RPC Dispatch ✅ PARTIAL
+## Priority 10: Schema-Based Generic RPC Dispatch ✅ COMPLETE
 
 **Estimated Time**: Unknown - Research required
 **Value**: LOW (workarounds exist)
@@ -301,26 +301,23 @@
 
 **Problem**: Remote typed RPC to cluster actors requires compile-time knowledge of message types. When actors are in example code (not the library), the introspection layer can't directly call typed RPCs.
 
-**Status**: ✅ **Basic dispatcher implemented!** The `#[ractor_shell]` macro now generates typed RPC dispatchers for single-argument RPCs (just `RpcReplyPort<T>`). This covers most common use cases including RaftMessage's `GetStatus`, `IsLeader`, `GetLeader`, and `GetPeers` RPCs.
+**Status**: ✅ **Full dispatcher implemented!** The `#[ractor_shell]` macro now generates typed RPC dispatchers for all RPCs, including those with arguments.
 
 **What Works**:
 - [x] Macro generates dispatcher module for `#[ractor_shell]` enums
 - [x] Dispatcher handles RPCs with only `RpcReplyPort<T>` argument
+- [x] Dispatcher handles RPCs with additional arguments (e.g., `SetValue(i32, RpcReplyPort<bool>)`)
+- [x] JSON argument deserialization with clear error messages for missing/invalid fields
 - [x] 5-second timeout with proper error handling
 - [x] Schema registry stores and retrieves dispatchers
 - [x] Introspection layer calls dispatchers automatically
 - [x] Works for both local and remote actors
 
-**Remaining Enhancement** (low priority):
-- [ ] **Parse arguments from JSON for RPCs with additional fields**
-  - Example: `UpdateValue(i32, RpcReplyPort<bool>)` - currently returns helpful error
-  - Would require JSON → typed argument deserialization in generated dispatcher
-  - Macro would need to:
-    1. Parse non-RpcReplyPort fields as arguments
-    2. Deserialize JSON to those types using serde
-    3. Pass them to the message constructor
-  - See `MACRO_DISPATCHER_PLAN.md` "Future Enhancements" section
-  - ~2-3 hours estimated
+**Implementation Details**:
+- Arguments are passed via JSON with field keys "0", "1", etc. for positional fields
+- Example: `call my_actor SetValue {"0": 42}` sets value to 42
+- Example: `call my_actor CompareAndSet {"0": 42, "1": 99}` for compare-and-swap
+- Clear error messages when fields are missing or have wrong types
 
 **Current Workarounds** (still valid for complex cases):
 1. ✅ Actors implement DynamicMessage wrapper (works, requires per-actor code)
@@ -394,7 +391,7 @@ These items need modifications to ractor core. Keep changes minimal.
 
 ## PR Checklist
 
-- [x] All tests pass: `cargo test --package ractor_shell` (213 tests)
+- [x] All tests pass: `cargo test --package ractor_shell` (234 tests)
 - [x] Clippy passes: `cargo clippy --package ractor_shell -- -D clippy::all -D warnings`
 - [x] Rustfmt passes: `cargo fmt --package ractor_shell -- --check`
 - [x] Documentation builds: `cargo doc --package ractor_shell --no-deps`

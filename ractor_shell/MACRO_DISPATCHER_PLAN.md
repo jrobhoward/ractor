@@ -658,11 +658,11 @@ pub enum MyMessage {
 
 ---
 
-## Future Enhancements (Out of Scope)
+## Future Enhancements
 
-### Argument Parsing from JSON
+### Argument Parsing from JSON ✅ IMPLEMENTED
 
-Currently dispatchers ignore `args` parameter. Future enhancement could:
+Dispatchers now parse `args` parameter for RPCs with arguments:
 
 ```rust
 // User writes:
@@ -671,21 +671,26 @@ UpdateValue(i32, RpcReplyPort<bool>)
 
 // Macro generates:
 "UpdateValue" => {
-    let value: i32 = serde_json::from_value(args)
-        .map_err(|e| format!("Invalid args: {}", e))?;
-    let result = ractor::call!(actor_ref, |port|
-        RaftMessage::UpdateValue(value, port)
-    ).await?;
-    Ok(serde_json::json!(result))
+    let arg0: i32 = {
+        let value = args.get("0")
+            .ok_or_else(|| format!("Missing required field '0'"))?;
+        serde_json::from_value(value.clone())
+            .map_err(|e| format!("Invalid field '0': {}", e))?
+    };
+    match actor_ref.call(
+        |reply_port| MessageType::UpdateValue(arg0, reply_port),
+        timeout
+    ).await { /* ... */ }
 }
 ```
 
-This requires:
-- Parsing non-RpcReplyPort fields as arguments
-- Deserializing JSON to those types
-- Passing them to the message constructor
+**Implementation**:
+- Parses non-RpcReplyPort fields as positional arguments ("0", "1", etc.)
+- Deserializes JSON to typed values using serde
+- Passes them to the message constructor with reply port closure
+- Clear error messages for missing or invalid fields
 
-**Complexity**: Medium. Should be a separate PR after basic dispatcher works.
+**Usage**: `call my_actor UpdateValue {"0": 42}`
 
 ### Custom Timeout Configuration
 
