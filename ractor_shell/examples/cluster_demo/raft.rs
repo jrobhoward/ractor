@@ -4,11 +4,14 @@
 //! It provides actors that participate in leader election using typed messages for
 //! direct peer-to-peer communication with full network tracing support.
 //!
+//! This is example code demonstrating how to build distributed actors with ractor_shell
+//! introspection support. It is not part of the ractor_shell library.
+//!
 //! ## Usage
 //!
 //! ```rust,ignore
 //! use ractor::Actor;
-//! use ractor_shell::raft::{RaftNode, RaftConfig};
+//! use cluster_demo::raft::{RaftNode, RaftConfig};
 //!
 //! // Create a Raft node that participates in leader election
 //! let config = RaftConfig {
@@ -196,11 +199,11 @@ pub struct RaftState {
     /// Votes received in current election (when Candidate)
     pub votes_received: Vec<String>,
     /// Generation counter for election timers (to ignore stale timers)
-    election_timer_generation: u64,
+    pub(crate) election_timer_generation: u64,
     /// Generation counter for heartbeat timers
-    heartbeat_timer_generation: u64,
+    pub(crate) heartbeat_timer_generation: u64,
     /// Generation counter for peer discovery timers
-    discovery_timer_generation: u64,
+    pub(crate) discovery_timer_generation: u64,
 }
 
 impl RaftState {
@@ -223,7 +226,7 @@ impl RaftState {
         self.role == RaftRole::Leader
     }
 
-    fn peer_count(&self) -> usize {
+    pub fn peer_count(&self) -> usize {
         self.peers.len()
     }
 
@@ -241,25 +244,25 @@ impl RaftState {
     }
 
     /// Increment election timer generation and return the new value
-    fn next_election_generation(&mut self) -> u64 {
+    pub(crate) fn next_election_generation(&mut self) -> u64 {
         self.election_timer_generation += 1;
         self.election_timer_generation
     }
 
     /// Increment heartbeat timer generation and return the new value
-    fn next_heartbeat_generation(&mut self) -> u64 {
+    pub(crate) fn next_heartbeat_generation(&mut self) -> u64 {
         self.heartbeat_timer_generation += 1;
         self.heartbeat_timer_generation
     }
 
     /// Increment discovery timer generation and return the new value
-    fn next_discovery_generation(&mut self) -> u64 {
+    pub(crate) fn next_discovery_generation(&mut self) -> u64 {
         self.discovery_timer_generation += 1;
         self.discovery_timer_generation
     }
 
     /// Build a RaftStatus for RPC responses
-    fn get_status(&self) -> RaftStatus {
+    pub fn get_status(&self) -> RaftStatus {
         RaftStatus {
             node_name: self.config.node_name.clone(),
             role: self.role.to_string(),
@@ -305,7 +308,7 @@ impl Actor for RaftNode {
 
         // Register schema for shell introspection
         if let Some(name) = myself.get_name() {
-            crate::schema_registry::register::<RaftMessage>(&name);
+            ractor_shell::schema_registry::register::<RaftMessage>(&name);
         }
 
         let mut state = RaftState::new(config);
@@ -449,7 +452,7 @@ impl Actor for RaftNode {
     ) -> Result<(), ActorProcessingErr> {
         // Unregister schema
         if let Some(name) = myself.get_name() {
-            crate::schema_registry::unregister(&name);
+            ractor_shell::schema_registry::unregister(&name);
         }
         Ok(())
     }

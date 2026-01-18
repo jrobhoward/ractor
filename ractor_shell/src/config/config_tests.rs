@@ -39,7 +39,7 @@ fn ShellConfig___get_node_server_port___uses_default_when_not_set() {
 
     let port = config.get_node_server_port();
 
-    assert_eq!(port, crate::DEFAULT_NODE_SERVER_PORT);
+    assert_eq!(port, 9100); // Default port for local NodeServer
 }
 
 #[test]
@@ -60,7 +60,7 @@ fn ShellConfig___get_cluster_cookie___uses_default_when_not_set() {
 
     let cookie = config.get_cluster_cookie();
 
-    assert_eq!(cookie, crate::DEFAULT_CLUSTER_COOKIE);
+    assert_eq!(cookie, "secret_cookie"); // Default cluster cookie
 }
 
 #[test]

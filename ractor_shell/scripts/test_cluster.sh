@@ -156,23 +156,23 @@ print_header
 # Build the project first
 echo -e "${YELLOW}Building ractor_shell...${NC}"
 cd "$REPO_ROOT"
-cargo build --example cluster_node -p ractor_shell --quiet
-cargo build --example demo -p ractor_shell --quiet
+cargo build --example cluster_demo -p ractor_shell --quiet
 echo -e "${GREEN}Build complete.${NC}"
 echo
 
 # Set up RUST_LOG based on log level
 # Note: We intentionally exclude ractor_cluster debug logs as they're extremely
 # verbose (logs every network SEND/RECEIVE). Use --cluster-debug if you need them.
+# The raft module is now in the example code (cluster_demo::raft).
 case $LOG_LEVEL in
     trace)
-        export RUST_LOG="ractor_shell::raft=trace"
+        export RUST_LOG="cluster_demo::raft=trace"
         ;;
     debug)
-        export RUST_LOG="ractor_shell::raft=debug"
+        export RUST_LOG="cluster_demo::raft=debug"
         ;;
     *)
-        export RUST_LOG="ractor_shell::raft=info"
+        export RUST_LOG="cluster_demo::raft=info"
         ;;
 esac
 
@@ -201,7 +201,7 @@ NODE_ADDRS+=("127.0.0.1:$FIRST_PORT")
 echo -e "  Starting ${CYAN}$FIRST_NAME${NC} on port ${CYAN}$FIRST_PORT${NC} (seed node)..."
 
 LOG_FILE="/tmp/ractor_${FIRST_NAME}.log"
-cargo run --example cluster_node -p ractor_shell --quiet -- \
+cargo run --example cluster_demo -p ractor_shell --quiet -- node \
     --port "$FIRST_PORT" \
     --name "$FIRST_NAME" \
     --cookie "$COOKIE" \
@@ -232,7 +232,7 @@ for i in $(seq 2 $NUM_NODES); do
     echo -e "  Starting ${CYAN}$NODE_NAME${NC} on port ${CYAN}$PORT${NC} (connecting to $FIRST_NAME)..."
 
     LOG_FILE="/tmp/ractor_${NODE_NAME}.log"
-    cargo run --example cluster_node -p ractor_shell --quiet -- \
+    cargo run --example cluster_demo -p ractor_shell --quiet -- node \
         --port "$PORT" \
         --name "$NODE_NAME" \
         --cookie "$COOKIE" \
@@ -322,7 +322,7 @@ if [ "$START_SHELL" = true ]; then
     echo
 
     # Start the shell (this blocks until the user exits)
-    cargo run --example demo -p ractor_shell --quiet
+    cargo run --example cluster_demo -p ractor_shell --quiet -- shell
 else
     echo -e "${CYAN}────────────────────────────────────────────────────────────${NC}"
     echo -e "${CYAN}  ${BOLD}Manual Testing Mode${NC}"
@@ -330,11 +330,11 @@ else
     echo
     echo "  Start the shell manually with:"
     echo
-    echo -e "    ${GREEN}cargo run --example demo -p ractor_shell${NC}"
+    echo -e "    ${GREEN}cargo run --example cluster_demo -p ractor_shell -- shell${NC}"
     echo
     echo "  Or connect directly to a node:"
     echo
-    echo -e "    ${GREEN}cargo run --example demo -p ractor_shell -- --connect 127.0.0.1:$START_PORT${NC}"
+    echo -e "    ${GREEN}cargo run --example cluster_demo -p ractor_shell -- shell --connect 127.0.0.1:$START_PORT${NC}"
     echo
     echo "  Press Ctrl+C to stop all nodes."
     echo

@@ -94,16 +94,17 @@ impl ShellConfig {
     }
 
     /// Get the node server port
+    ///
+    /// Default: 9100 (for the local NodeServer when connecting to remote nodes)
     pub fn get_node_server_port(&self) -> u16 {
-        self.node_server_port
-            .unwrap_or(crate::DEFAULT_NODE_SERVER_PORT)
+        self.node_server_port.unwrap_or(9100)
     }
 
     /// Get the cluster cookie
+    ///
+    /// Default: "secret_cookie"
     pub fn get_cluster_cookie(&self) -> &str {
-        self.cluster_cookie
-            .as_deref()
-            .unwrap_or(crate::DEFAULT_CLUSTER_COOKIE)
+        self.cluster_cookie.as_deref().unwrap_or("secret_cookie")
     }
 
     /// Get the history file path

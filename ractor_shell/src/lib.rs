@@ -71,7 +71,6 @@ pub mod introspection;
 pub mod messages;
 pub mod monitor;
 pub mod protocol;
-pub mod raft;
 pub mod schema_registry;
 pub mod table;
 pub mod tracing;
@@ -84,19 +83,10 @@ pub use error::{ShellError, ShellResult};
 /// Default timeout for RPC calls.
 pub const DEFAULT_RPC_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// Default port for the local NodeServer when connecting to remote nodes.
-pub const DEFAULT_NODE_SERVER_PORT: u16 = 9100;
-
-/// Default cookie for cluster authentication.
-pub const DEFAULT_CLUSTER_COOKIE: &str = "secret_cookie";
-
 /// Known process groups for local enumeration (ractor 0.15 doesn't expose group listing).
-pub const KNOWN_PROCESS_GROUPS: &[&str] = &[
-    "ping_pong",
-    "ractor_shell_introspection",
-    "demo_group",
-    "raft_cluster",
-];
+/// Note: "raft_cluster" is only relevant for examples that use Raft.
+pub const KNOWN_PROCESS_GROUPS: &[&str] =
+    &["ping_pong", "ractor_shell_introspection", "demo_group"];
 
 use introspection::INTROSPECTION_GROUP;
 use protocol::{ClusterTopology, ShellProtocolMessage, SubscriptionId};
@@ -1592,17 +1582,12 @@ impl ShellState {
         }
 
         // Local call - handle known typed actors
-        let Some(cell) = registry::where_is(actor.to_string()) else {
+        let Some(_cell) = registry::where_is(actor.to_string()) else {
             println!("{} Actor '{}' not found in registry", "✗".red(), actor);
             return Ok(());
         };
 
-        // Special handling for raft_node (RaftMessage)
-        if actor == "raft_node" {
-            return self.cmd_call_raft(&cell, &variant, &args).await;
-        }
-
-        // For other schema actors, show helpful message
+        // For schema actors, show helpful message
         println!(
             "{}",
             "⚠ Typed RPC not yet implemented for this actor".yellow()
@@ -1669,129 +1654,6 @@ impl ShellState {
         })?;
 
         Ok((variant, args))
-    }
-
-    /// Call a raft_node actor with typed RaftMessage RPC
-    async fn cmd_call_raft(
-        &self,
-        cell: &ractor::ActorCell,
-        variant: &str,
-        _args: &serde_json::Value,
-    ) -> ShellResult<()> {
-        use raft::RaftMessage;
-
-        let raft_ref: ActorRef<RaftMessage> = ActorRef::from(cell.clone());
-
-        match variant {
-            "GetStatus" => {
-                let result = raft_ref
-                    .call(RaftMessage::GetStatus, Some(DEFAULT_RPC_TIMEOUT))
-                    .await
-                    .map_err(ShellError::messaging)?;
-
-                match result {
-                    CallResult::Success(status) => {
-                        println!("{} RPC call successful", "✓".green().bold());
-                        println!();
-                        println!("{}", "Response:".bold());
-                        let json = serde_json::to_value(&status).unwrap_or_default();
-                        println!(
-                            "{}",
-                            serde_json::to_string_pretty(&json)
-                                .unwrap_or_default()
-                                .green()
-                        );
-                    }
-                    CallResult::Timeout => {
-                        println!("{} RPC call timed out", "✗".red().bold());
-                    }
-                    CallResult::SenderError => {
-                        println!("{} RPC sender error", "✗".red().bold());
-                    }
-                }
-            }
-            "IsLeader" => {
-                let result = raft_ref
-                    .call(RaftMessage::IsLeader, Some(DEFAULT_RPC_TIMEOUT))
-                    .await
-                    .map_err(ShellError::messaging)?;
-
-                match result {
-                    CallResult::Success(is_leader) => {
-                        println!("{} RPC call successful", "✓".green().bold());
-                        println!();
-                        println!("{}", "Response:".bold());
-                        println!("{}", is_leader.to_string().green());
-                    }
-                    CallResult::Timeout => {
-                        println!("{} RPC call timed out", "✗".red().bold());
-                    }
-                    CallResult::SenderError => {
-                        println!("{} RPC sender error", "✗".red().bold());
-                    }
-                }
-            }
-            "GetLeader" => {
-                let result = raft_ref
-                    .call(RaftMessage::GetLeader, Some(DEFAULT_RPC_TIMEOUT))
-                    .await
-                    .map_err(ShellError::messaging)?;
-
-                match result {
-                    CallResult::Success(leader) => {
-                        println!("{} RPC call successful", "✓".green().bold());
-                        println!();
-                        println!("{}", "Response:".bold());
-                        let display = leader.unwrap_or_else(|| "(none)".to_string());
-                        println!("{}", display.green());
-                    }
-                    CallResult::Timeout => {
-                        println!("{} RPC call timed out", "✗".red().bold());
-                    }
-                    CallResult::SenderError => {
-                        println!("{} RPC sender error", "✗".red().bold());
-                    }
-                }
-            }
-            "GetPeers" => {
-                let result = raft_ref
-                    .call(RaftMessage::GetPeers, Some(DEFAULT_RPC_TIMEOUT))
-                    .await
-                    .map_err(ShellError::messaging)?;
-
-                match result {
-                    CallResult::Success(peers) => {
-                        println!("{} RPC call successful", "✓".green().bold());
-                        println!();
-                        println!("{}", "Response:".bold());
-                        let json = serde_json::to_value(&peers).unwrap_or_default();
-                        println!(
-                            "{}",
-                            serde_json::to_string_pretty(&json)
-                                .unwrap_or_default()
-                                .green()
-                        );
-                    }
-                    CallResult::Timeout => {
-                        println!("{} RPC call timed out", "✗".red().bold());
-                    }
-                    CallResult::SenderError => {
-                        println!("{} RPC sender error", "✗".red().bold());
-                    }
-                }
-            }
-            _ => {
-                println!("{} Unknown RPC variant: {}", "✗".red().bold(), variant);
-                println!();
-                println!("{}", "Available RPC variants:".bold());
-                println!("  {} GetStatus {{}}", "•".bright_black());
-                println!("  {} IsLeader {{}}", "•".bright_black());
-                println!("  {} GetLeader {{}}", "•".bright_black());
-                println!("  {} GetPeers {{}}", "•".bright_black());
-            }
-        }
-
-        Ok(())
     }
 
     /// Call a typed RPC on a remote node
@@ -2148,12 +2010,16 @@ impl ShellState {
         println!("{} {}", "Connecting to".bright_black(), host.green());
 
         // Spawn NodeServer if not already running
+        // Default port: 9100, default cookie: "secret_cookie"
+        const LOCAL_NODE_SERVER_PORT: u16 = 9100;
+        const LOCAL_CLUSTER_COOKIE: &str = "secret_cookie";
+
         if self.node_server.is_none() {
             println!("  Starting local NodeServer...");
 
             let node_server = ractor_cluster::NodeServer::new(
-                DEFAULT_NODE_SERVER_PORT,
-                DEFAULT_CLUSTER_COOKIE.to_string(),
+                LOCAL_NODE_SERVER_PORT,
+                LOCAL_CLUSTER_COOKIE.to_string(),
                 format!("{}_instance", self.local_node_name),
                 self.local_node_name.clone(),
                 None, // no encryption
@@ -2166,7 +2032,7 @@ impl ShellState {
             println!(
                 "  {} NodeServer started on port {}",
                 "✓".green(),
-                DEFAULT_NODE_SERVER_PORT
+                LOCAL_NODE_SERVER_PORT
             );
         }
 

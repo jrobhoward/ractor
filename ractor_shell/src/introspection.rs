@@ -400,6 +400,12 @@ async fn call_dynamic_message_to_actor(
 }
 
 /// Call a typed RPC on a schema-enabled actor
+///
+/// Note: Typed RPC dispatch requires compile-time knowledge of the message type.
+/// Since actors define their own message types in user code (not the library),
+/// this function currently only supports schema introspection (listing variants)
+/// but not actual RPC calls. Use the `call` shell command with JSON messages
+/// for actors that implement `DynamicMessage`.
 async fn call_typed_rpc_on_actor(
     actor_name: &str,
     variant_name: &str,
@@ -411,105 +417,27 @@ async fn call_typed_rpc_on_actor(
     }
 
     // Find the actor in registry
-    let Some(cell) = registry::where_is(actor_name.to_string()) else {
+    let Some(_cell) = registry::where_is(actor_name.to_string()) else {
         return TypedRpcResult::ActorNotFound;
     };
 
-    // Handle raft_node specifically (it's the main typed actor currently)
-    if actor_name == "raft_node" {
-        use crate::raft::RaftMessage;
-
-        let raft_ref: ActorRef<RaftMessage> = ActorRef::from(cell);
-
-        match variant_name {
-            "GetStatus" => {
-                let call_result = raft_ref
-                    .call(RaftMessage::GetStatus, Some(DEFAULT_RPC_TIMEOUT))
-                    .await;
-
-                match call_result {
-                    Ok(CallResult::Success(status)) => {
-                        let json = serde_json::to_value(&status).unwrap_or(serde_json::Value::Null);
-                        TypedRpcResult::Success(json)
-                    }
-                    Ok(CallResult::Timeout) => TypedRpcResult::CallFailed(format!(
-                        "Timeout after {:?}",
-                        DEFAULT_RPC_TIMEOUT
-                    )),
-                    Ok(CallResult::SenderError) => TypedRpcResult::CallFailed(
-                        "Sender error (actor may have stopped)".to_string(),
-                    ),
-                    Err(e) => TypedRpcResult::CallFailed(format!("{:?}", e)),
-                }
-            }
-            "IsLeader" => {
-                let call_result = raft_ref
-                    .call(RaftMessage::IsLeader, Some(DEFAULT_RPC_TIMEOUT))
-                    .await;
-
-                match call_result {
-                    Ok(CallResult::Success(is_leader)) => {
-                        TypedRpcResult::Success(serde_json::Value::Bool(is_leader))
-                    }
-                    Ok(CallResult::Timeout) => TypedRpcResult::CallFailed(format!(
-                        "Timeout after {:?}",
-                        DEFAULT_RPC_TIMEOUT
-                    )),
-                    Ok(CallResult::SenderError) => TypedRpcResult::CallFailed(
-                        "Sender error (actor may have stopped)".to_string(),
-                    ),
-                    Err(e) => TypedRpcResult::CallFailed(format!("{:?}", e)),
-                }
-            }
-            "GetLeader" => {
-                let call_result = raft_ref
-                    .call(RaftMessage::GetLeader, Some(DEFAULT_RPC_TIMEOUT))
-                    .await;
-
-                match call_result {
-                    Ok(CallResult::Success(leader)) => {
-                        let json = leader
-                            .map(serde_json::Value::String)
-                            .unwrap_or(serde_json::Value::Null);
-                        TypedRpcResult::Success(json)
-                    }
-                    Ok(CallResult::Timeout) => TypedRpcResult::CallFailed(format!(
-                        "Timeout after {:?}",
-                        DEFAULT_RPC_TIMEOUT
-                    )),
-                    Ok(CallResult::SenderError) => TypedRpcResult::CallFailed(
-                        "Sender error (actor may have stopped)".to_string(),
-                    ),
-                    Err(e) => TypedRpcResult::CallFailed(format!("{:?}", e)),
-                }
-            }
-            "GetPeers" => {
-                let call_result = raft_ref
-                    .call(RaftMessage::GetPeers, Some(DEFAULT_RPC_TIMEOUT))
-                    .await;
-
-                match call_result {
-                    Ok(CallResult::Success(peers)) => {
-                        let json = serde_json::to_value(&peers).unwrap_or(serde_json::Value::Null);
-                        TypedRpcResult::Success(json)
-                    }
-                    Ok(CallResult::Timeout) => TypedRpcResult::CallFailed(format!(
-                        "Timeout after {:?}",
-                        DEFAULT_RPC_TIMEOUT
-                    )),
-                    Ok(CallResult::SenderError) => TypedRpcResult::CallFailed(
-                        "Sender error (actor may have stopped)".to_string(),
-                    ),
-                    Err(e) => TypedRpcResult::CallFailed(format!("{:?}", e)),
-                }
-            }
-            _ => TypedRpcResult::UnknownVariant(variant_name.to_string()),
-        }
-    } else {
-        // For other schema-enabled actors, we would need a generic way to dispatch
-        // For now, return NotSchemaEnabled since we only have raft_node
-        TypedRpcResult::NotSchemaEnabled
-    }
+    // Generic typed RPC dispatch requires runtime type information that isn't
+    // available in Rust's type system. The schema registry stores schema info
+    // (variant names, field types) but can't construct or dispatch messages
+    // without compile-time knowledge of the message type.
+    //
+    // To call typed actors:
+    // 1. If the actor implements DynamicMessage, use `call <actor> {json}`
+    // 2. Schema introspection (`schema <actor>`) still works to see available variants
+    //
+    // For custom typed actors, applications can:
+    // - Implement DynamicMessage as a wrapper
+    // - Create application-specific introspection handlers
+    TypedRpcResult::CallFailed(format!(
+        "Typed RPC for '{}::{}' not available via introspection. \
+         Use DynamicMessage or application-specific handlers.",
+        actor_name, variant_name
+    ))
 }
 
 /// Check if a trace event matches a subscription pattern
