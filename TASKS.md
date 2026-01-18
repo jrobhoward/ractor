@@ -60,16 +60,14 @@
   - Two approaches coexist appropriately: DynamicMessage for flexibility, typed schemas for performance
   - No changes needed - current architecture is sound
 
-- [ ] **Enable Raft debug logging in shell tracing**
-  - Raft already has `tracing::info!` calls but they use custom field names (`node`, `term`)
-  - Shell tracing expects `actor_name` or `actor_id` fields to match patterns like `raft_node`
-  - Options to fix:
-    1. Update Raft tracing calls to include `actor_name` field: `tracing::info!(actor_name = "raft_node", ...)`
-    2. Make shell tracing match against any field value, not just `actor_name`/`actor_id`
-    3. Add `trace raft` command that specifically captures Raft-related module paths
-  - Current workaround: Use `trace remote <node> *` to capture all events
-  - File: `ractor_shell/examples/cluster_demo/raft.rs` (tracing calls throughout)
-  - File: `ractor_shell/src/tracing/layer.rs:339-408` (event filtering logic)
+- [x] **Enable Raft debug logging in shell tracing** ✅ COMPLETE
+  - Implemented option 2: Shell tracing now matches against any field value
+  - Added `matches_any_field()` method to `TraceFilter`
+  - Updated `layer.rs` to check field values in addition to actor_name/actor_id/target
+  - Now `trace node_*` will capture Raft events with `node = "node_a"` etc.
+  - Example: `trace node_a` or `trace node_*` will capture Raft logs
+  - File: `ractor_shell/src/tracing/filter.rs:220-241` (matches_any_field)
+  - File: `ractor_shell/src/tracing/layer.rs:418-421` (filtering logic)
 
 - [ ] **Add command to trigger fresh leader election**
   - New shell command: `raft election` or `raft stepdown`
@@ -390,7 +388,7 @@ These items need modifications to ractor core. Keep changes minimal.
 
 ## PR Checklist
 
-- [x] All tests pass: `cargo test --package ractor_shell` (206 tests)
+- [x] All tests pass: `cargo test --package ractor_shell` (213 tests)
 - [x] Clippy passes: `cargo clippy --package ractor_shell -- -D clippy::all -D warnings`
 - [x] Rustfmt passes: `cargo fmt --package ractor_shell -- --check`
 - [x] Documentation builds: `cargo doc --package ractor_shell --no-deps`

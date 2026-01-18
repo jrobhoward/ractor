@@ -159,6 +159,15 @@ impl TracingHandle {
         filter.matches_target(target)
     }
 
+    /// Check if any field value matches the current filter.
+    fn matches_any_field(&self, fields: &[(String, String)]) -> bool {
+        if !self.inner.enabled.load(Ordering::SeqCst) {
+            return false;
+        }
+        let filter = self.inner.filter.read().unwrap();
+        filter.matches_any_field(fields)
+    }
+
     /// Write an event to all outputs.
     fn write_event(&self, event: TraceEvent) {
         // Write to configured outputs (console, files)
@@ -405,12 +414,13 @@ where
             actor_name = visitor.actor_name;
         }
 
-        // Only emit if actor name, actor id, or target matches our filter
+        // Only emit if actor name, actor id, target, or any field value matches our filter
         let target = event.metadata().target();
         let matches = self
             .handle
             .matches(actor_name.as_deref(), actor_id.as_deref())
-            || self.handle.matches_target(target);
+            || self.handle.matches_target(target)
+            || self.handle.matches_any_field(&visitor.fields);
 
         if !matches {
             return;

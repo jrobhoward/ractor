@@ -285,3 +285,78 @@ fn filter_clear___resets_level_to_trace() {
 
     assert_eq!(filter.min_level(), MinLevel::Trace);
 }
+
+// matches_any_field tests
+
+#[test]
+fn filter_matches_any_field___empty_filter___returns_false() {
+    let filter = TraceFilter::new();
+    let fields = vec![
+        ("node".to_string(), "node_a".to_string()),
+        ("term".to_string(), "1".to_string()),
+    ];
+
+    assert!(!filter.matches_any_field(&fields));
+}
+
+#[test]
+fn filter_matches_any_field___trace_all___returns_true() {
+    let filter = TraceFilter::all();
+    let fields = vec![("node".to_string(), "node_a".to_string())];
+
+    assert!(filter.matches_any_field(&fields));
+}
+
+#[test]
+fn filter_matches_any_field___exact_match___returns_true() {
+    let mut filter = TraceFilter::new();
+    filter.add_pattern("node_a");
+    let fields = vec![
+        ("node".to_string(), "node_a".to_string()),
+        ("term".to_string(), "1".to_string()),
+    ];
+
+    assert!(filter.matches_any_field(&fields));
+}
+
+#[test]
+fn filter_matches_any_field___glob_match___returns_true() {
+    let mut filter = TraceFilter::new();
+    filter.add_pattern("node_*");
+    let fields = vec![
+        ("node".to_string(), "node_b".to_string()),
+        ("term".to_string(), "5".to_string()),
+    ];
+
+    assert!(filter.matches_any_field(&fields));
+}
+
+#[test]
+fn filter_matches_any_field___no_match___returns_false() {
+    let mut filter = TraceFilter::new();
+    filter.add_pattern("worker_*");
+    let fields = vec![
+        ("node".to_string(), "node_a".to_string()),
+        ("term".to_string(), "1".to_string()),
+    ];
+
+    assert!(!filter.matches_any_field(&fields));
+}
+
+#[test]
+fn filter_matches_any_field___quoted_value___strips_quotes() {
+    let mut filter = TraceFilter::new();
+    filter.add_pattern("node_a");
+    let fields = vec![("node".to_string(), "\"node_a\"".to_string())];
+
+    assert!(filter.matches_any_field(&fields));
+}
+
+#[test]
+fn filter_matches_any_field___empty_fields___returns_false() {
+    let mut filter = TraceFilter::new();
+    filter.add_pattern("node_*");
+    let fields: Vec<(String, String)> = vec![];
+
+    assert!(!filter.matches_any_field(&fields));
+}

@@ -216,6 +216,30 @@ impl TraceFilter {
 
         false
     }
+
+    /// Check if any field value matches the filter patterns.
+    /// This allows filtering by arbitrary field values like `node = "node_a"`.
+    pub fn matches_any_field(&self, fields: &[(String, String)]) -> bool {
+        if self.trace_all {
+            return true;
+        }
+
+        if self.patterns.is_empty() {
+            return false;
+        }
+
+        for (_key, value) in fields {
+            // Strip quotes from the value if present
+            let clean_value = value.trim_matches('"');
+            for pattern in &self.patterns {
+                if glob_match::glob_match(pattern, clean_value) {
+                    return true;
+                }
+            }
+        }
+
+        false
+    }
 }
 
 #[cfg(test)]
