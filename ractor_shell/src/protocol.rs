@@ -133,6 +133,23 @@ pub enum ShellProtocolMessage {
     /// Get the parent (supervisor) of an actor
     #[rpc]
     GetActorParent(String, RpcReplyPort<Option<ActorInfo>>),
+
+    // ==================== Remote Monitoring ====================
+    /// Start monitoring an actor by name (returns true if actor found)
+    #[rpc]
+    StartMonitoring(String, RpcReplyPort<bool>),
+
+    /// Stop monitoring an actor by name (returns true if was being monitored)
+    #[rpc]
+    StopMonitoring(String, RpcReplyPort<bool>),
+
+    /// Get list of currently monitored actors
+    #[rpc]
+    GetMonitoredActors(RpcReplyPort<Vec<String>>),
+
+    /// Poll for monitor events (returns batch of events since last poll)
+    #[rpc]
+    PollMonitorEvents(RpcReplyPort<MonitorEventBatch>),
 }
 
 /// Result of a typed RPC call
@@ -181,6 +198,32 @@ pub struct SerializableTraceEvent {
     pub message: String,
     /// Additional fields
     pub fields: Vec<(String, String)>,
+}
+
+/// Batch of monitor events with dropped count
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MonitorEventBatch {
+    /// Monitor events since last poll
+    pub events: Vec<SerializableMonitorEvent>,
+    /// Number of events dropped due to buffer overflow since last poll
+    pub dropped_count: usize,
+}
+
+/// Serializable monitor event for network transmission
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SerializableMonitorEvent {
+    /// Timestamp as RFC3339 string
+    pub timestamp: String,
+    /// Actor ID (e.g., "0.1")
+    pub actor_id: String,
+    /// Actor name (if registered)
+    pub actor_name: Option<String>,
+    /// Event type: "STARTED", "STOPPED", "PANICKED", "KILLED"
+    pub event_type: String,
+    /// Reason for stopping (for STOPPED events)
+    pub reason: Option<String>,
+    /// Error message (for PANICKED events)
+    pub error: Option<String>,
 }
 
 /// Information about an actor (serializable across network)

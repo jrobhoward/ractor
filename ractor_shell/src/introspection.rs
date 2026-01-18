@@ -43,6 +43,9 @@ pub const INTROSPECTION_GROUP: &str = "ractor_shell_introspection";
 /// Maximum number of trace events to buffer per subscription before discarding
 const MAX_TRACE_BUFFER_SIZE: usize = 1000;
 
+/// Maximum number of monitor events to buffer before discarding
+const MAX_MONITOR_BUFFER_SIZE: usize = 100;
+
 /// Global counter for generating unique subscription IDs
 static NEXT_SUBSCRIPTION_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -91,6 +94,49 @@ impl TraceSubscription {
 /// to inspect actors, process groups, and cluster topology on this node.
 pub struct IntrospectionActor;
 
+/// Tracking state for a monitored actor
+struct MonitoredActor {
+    /// Last known status of the actor
+    last_status: Option<ractor::ActorStatus>,
+}
+
+/// State for remote monitoring
+struct MonitoringState {
+    /// Actors being monitored (name -> tracking state)
+    monitored: HashMap<String, MonitoredActor>,
+    /// Buffered monitor events
+    event_buffer: VecDeque<crate::protocol::SerializableMonitorEvent>,
+    /// Number of events dropped due to buffer overflow
+    dropped_count: usize,
+}
+
+impl MonitoringState {
+    fn new() -> Self {
+        Self {
+            monitored: HashMap::new(),
+            event_buffer: VecDeque::with_capacity(MAX_MONITOR_BUFFER_SIZE),
+            dropped_count: 0,
+        }
+    }
+
+    /// Add an event to the buffer, dropping oldest if full
+    fn push_event(&mut self, event: crate::protocol::SerializableMonitorEvent) {
+        if self.event_buffer.len() >= MAX_MONITOR_BUFFER_SIZE {
+            self.event_buffer.pop_front();
+            self.dropped_count += 1;
+        }
+        self.event_buffer.push_back(event);
+    }
+
+    /// Take all buffered events and reset dropped count
+    fn take_events(&mut self) -> (Vec<crate::protocol::SerializableMonitorEvent>, usize) {
+        let events: Vec<_> = self.event_buffer.drain(..).collect();
+        let dropped = self.dropped_count;
+        self.dropped_count = 0;
+        (events, dropped)
+    }
+}
+
 /// State for the introspection actor
 pub struct IntrospectionState {
     /// Name of this node in the cluster
@@ -99,6 +145,8 @@ pub struct IntrospectionState {
     subscriptions: HashMap<SubscriptionId, TraceSubscription>,
     /// Tracing handle for controlling remote tracing
     tracing_handle: Option<TracingHandle>,
+    /// Remote monitoring state
+    monitoring: MonitoringState,
 }
 
 /// Arguments for spawning an IntrospectionActor
@@ -151,6 +199,7 @@ impl Actor for IntrospectionActor {
             node_name: args.node_name,
             subscriptions: HashMap::new(),
             tracing_handle: args.tracing_handle,
+            monitoring: MonitoringState::new(),
         })
     }
 
@@ -379,6 +428,141 @@ impl Actor for IntrospectionActor {
                     .map(|supervisor_cell| ActorInfo::from_cell(&supervisor_cell));
 
                 let _ = reply.send(parent_info);
+            }
+
+            // ==================== Remote Monitoring ====================
+            ShellProtocolMessage::StartMonitoring(actor_name, reply) => {
+                use chrono::Local;
+
+                // Check if actor exists
+                let found = if let Some(cell) = registry::where_is(actor_name.clone()) {
+                    let status = cell.get_status();
+
+                    // Add to monitored list
+                    state.monitoring.monitored.insert(
+                        actor_name.clone(),
+                        MonitoredActor {
+                            last_status: Some(status),
+                        },
+                    );
+
+                    // Generate STARTED event
+                    let event = crate::protocol::SerializableMonitorEvent {
+                        timestamp: Local::now().to_rfc3339(),
+                        actor_id: cell.get_id().to_string(),
+                        actor_name: Some(actor_name),
+                        event_type: "STARTED".to_string(),
+                        reason: None,
+                        error: None,
+                    };
+                    state.monitoring.push_event(event);
+
+                    true
+                } else {
+                    false
+                };
+
+                let _ = reply.send(found);
+            }
+
+            ShellProtocolMessage::StopMonitoring(actor_name, reply) => {
+                let was_monitored = state.monitoring.monitored.remove(&actor_name).is_some();
+                let _ = reply.send(was_monitored);
+            }
+
+            ShellProtocolMessage::GetMonitoredActors(reply) => {
+                let actors: Vec<String> = state.monitoring.monitored.keys().cloned().collect();
+                let _ = reply.send(actors);
+            }
+
+            ShellProtocolMessage::PollMonitorEvents(reply) => {
+                use chrono::Local;
+                use ractor::ActorStatus;
+
+                // Collect status changes and events to avoid borrow issues
+                let mut actors_to_remove = Vec::new();
+                let mut new_events = Vec::new();
+                let mut status_updates: Vec<(String, ActorStatus)> = Vec::new();
+
+                // First pass: check statuses and collect events
+                for (actor_name, tracked) in state.monitoring.monitored.iter() {
+                    if let Some(cell) = registry::where_is(actor_name.clone()) {
+                        let current_status = cell.get_status();
+
+                        // Check for status change
+                        if tracked.last_status != Some(current_status) {
+                            status_updates.push((actor_name.clone(), current_status));
+
+                            let event = match current_status {
+                                ActorStatus::Stopped => {
+                                    actors_to_remove.push(actor_name.clone());
+                                    Some(crate::protocol::SerializableMonitorEvent {
+                                        timestamp: Local::now().to_rfc3339(),
+                                        actor_id: cell.get_id().to_string(),
+                                        actor_name: Some(actor_name.clone()),
+                                        event_type: "STOPPED".to_string(),
+                                        reason: Some("Actor stopped".to_string()),
+                                        error: None,
+                                    })
+                                }
+                                ActorStatus::Stopping => {
+                                    Some(crate::protocol::SerializableMonitorEvent {
+                                        timestamp: Local::now().to_rfc3339(),
+                                        actor_id: cell.get_id().to_string(),
+                                        actor_name: Some(actor_name.clone()),
+                                        event_type: "STOPPING".to_string(),
+                                        reason: Some("Actor stopping".to_string()),
+                                        error: None,
+                                    })
+                                }
+                                _ => None,
+                            };
+
+                            if let Some(evt) = event {
+                                new_events.push(evt);
+                            }
+                        }
+                    } else {
+                        // Actor no longer exists - it stopped or was never registered
+                        if tracked.last_status.is_some() {
+                            let event = crate::protocol::SerializableMonitorEvent {
+                                timestamp: Local::now().to_rfc3339(),
+                                actor_id: "unknown".to_string(),
+                                actor_name: Some(actor_name.clone()),
+                                event_type: "STOPPED".to_string(),
+                                reason: Some("Actor no longer in registry".to_string()),
+                                error: None,
+                            };
+                            new_events.push(event);
+                        }
+                        actors_to_remove.push(actor_name.clone());
+                    }
+                }
+
+                // Second pass: update statuses
+                for (name, status) in status_updates {
+                    if let Some(tracked) = state.monitoring.monitored.get_mut(&name) {
+                        tracked.last_status = Some(status);
+                    }
+                }
+
+                // Push new events to buffer
+                for evt in new_events {
+                    state.monitoring.push_event(evt);
+                }
+
+                // Remove stopped actors from monitoring
+                for name in actors_to_remove {
+                    state.monitoring.monitored.remove(&name);
+                }
+
+                // Return buffered events
+                let (events, dropped) = state.monitoring.take_events();
+                let batch = crate::protocol::MonitorEventBatch {
+                    events,
+                    dropped_count: dropped,
+                };
+                let _ = reply.send(batch);
             }
         }
 

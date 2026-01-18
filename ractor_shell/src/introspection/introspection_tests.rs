@@ -888,3 +888,286 @@ async fn IntrospectionActor___get_process_group_tree___returns_groups_with_membe
     test_actor2.stop(None);
     introspection_ref.stop(None);
 }
+
+// ============================================================================
+// Remote Monitoring Tests
+// ============================================================================
+
+#[tokio::test]
+async fn IntrospectionActor___start_monitoring___returns_true_when_actor_found() {
+    // Create a test actor to monitor
+    let (test_actor, _handle) =
+        Actor::spawn(Some("monitor_test_actor".to_string()), DynamicTestActor, ())
+            .await
+            .expect("Failed to spawn test actor");
+
+    let args = IntrospectionArgs {
+        node_name: "monitor_test_node".to_string(),
+        tracing_handle: None,
+    };
+
+    let (introspection_ref, _handle) = Actor::spawn(
+        Some("monitor_introspection".to_string()),
+        IntrospectionActor,
+        args,
+    )
+    .await
+    .expect("Failed to spawn IntrospectionActor");
+
+    let result = introspection_ref
+        .call(
+            |reply| ShellProtocolMessage::StartMonitoring("monitor_test_actor".to_string(), reply),
+            Some(DEFAULT_RPC_TIMEOUT),
+        )
+        .await;
+
+    match result {
+        Ok(ractor::rpc::CallResult::Success(true)) => {
+            // Expected - actor was found and monitoring started
+        }
+        other => panic!("Expected Success(true), got {:?}", other),
+    }
+
+    test_actor.stop(None);
+    introspection_ref.stop(None);
+}
+
+#[tokio::test]
+async fn IntrospectionActor___start_monitoring___returns_false_when_actor_not_found() {
+    let args = IntrospectionArgs {
+        node_name: "monitor_test_node2".to_string(),
+        tracing_handle: None,
+    };
+
+    let (introspection_ref, _handle) = Actor::spawn(
+        Some("monitor_introspection2".to_string()),
+        IntrospectionActor,
+        args,
+    )
+    .await
+    .expect("Failed to spawn IntrospectionActor");
+
+    let result = introspection_ref
+        .call(
+            |reply| {
+                ShellProtocolMessage::StartMonitoring(
+                    "nonexistent_actor_abc_123".to_string(),
+                    reply,
+                )
+            },
+            Some(DEFAULT_RPC_TIMEOUT),
+        )
+        .await;
+
+    match result {
+        Ok(ractor::rpc::CallResult::Success(false)) => {
+            // Expected - actor was not found
+        }
+        other => panic!("Expected Success(false), got {:?}", other),
+    }
+
+    introspection_ref.stop(None);
+}
+
+#[tokio::test]
+async fn IntrospectionActor___stop_monitoring___returns_true_when_was_monitored() {
+    // Create a test actor to monitor
+    let (test_actor, _handle) = Actor::spawn(
+        Some("stop_monitor_test_actor".to_string()),
+        DynamicTestActor,
+        (),
+    )
+    .await
+    .expect("Failed to spawn test actor");
+
+    let args = IntrospectionArgs {
+        node_name: "stop_monitor_test_node".to_string(),
+        tracing_handle: None,
+    };
+
+    let (introspection_ref, _handle) = Actor::spawn(
+        Some("stop_monitor_introspection".to_string()),
+        IntrospectionActor,
+        args,
+    )
+    .await
+    .expect("Failed to spawn IntrospectionActor");
+
+    // Start monitoring first
+    let _ = introspection_ref
+        .call(
+            |reply| {
+                ShellProtocolMessage::StartMonitoring("stop_monitor_test_actor".to_string(), reply)
+            },
+            Some(DEFAULT_RPC_TIMEOUT),
+        )
+        .await;
+
+    // Now stop monitoring
+    let result = introspection_ref
+        .call(
+            |reply| {
+                ShellProtocolMessage::StopMonitoring("stop_monitor_test_actor".to_string(), reply)
+            },
+            Some(DEFAULT_RPC_TIMEOUT),
+        )
+        .await;
+
+    match result {
+        Ok(ractor::rpc::CallResult::Success(true)) => {
+            // Expected - actor was being monitored and is now stopped
+        }
+        other => panic!("Expected Success(true), got {:?}", other),
+    }
+
+    test_actor.stop(None);
+    introspection_ref.stop(None);
+}
+
+#[tokio::test]
+async fn IntrospectionActor___stop_monitoring___returns_false_when_not_monitored() {
+    let args = IntrospectionArgs {
+        node_name: "stop_monitor_test_node2".to_string(),
+        tracing_handle: None,
+    };
+
+    let (introspection_ref, _handle) = Actor::spawn(
+        Some("stop_monitor_introspection2".to_string()),
+        IntrospectionActor,
+        args,
+    )
+    .await
+    .expect("Failed to spawn IntrospectionActor");
+
+    // Try to stop monitoring an actor that was never monitored
+    let result = introspection_ref
+        .call(
+            |reply| {
+                ShellProtocolMessage::StopMonitoring("never_monitored_actor".to_string(), reply)
+            },
+            Some(DEFAULT_RPC_TIMEOUT),
+        )
+        .await;
+
+    match result {
+        Ok(ractor::rpc::CallResult::Success(false)) => {
+            // Expected - actor was not being monitored
+        }
+        other => panic!("Expected Success(false), got {:?}", other),
+    }
+
+    introspection_ref.stop(None);
+}
+
+#[tokio::test]
+async fn IntrospectionActor___get_monitored_actors___returns_monitored_list() {
+    // Create test actors to monitor
+    let (test_actor1, _handle1) = Actor::spawn(
+        Some("get_monitors_test_actor1".to_string()),
+        DynamicTestActor,
+        (),
+    )
+    .await
+    .expect("Failed to spawn test actor 1");
+
+    let (test_actor2, _handle2) = Actor::spawn(
+        Some("get_monitors_test_actor2".to_string()),
+        DynamicTestActor,
+        (),
+    )
+    .await
+    .expect("Failed to spawn test actor 2");
+
+    let args = IntrospectionArgs {
+        node_name: "get_monitors_test_node".to_string(),
+        tracing_handle: None,
+    };
+
+    let (introspection_ref, _handle) = Actor::spawn(
+        Some("get_monitors_introspection".to_string()),
+        IntrospectionActor,
+        args,
+    )
+    .await
+    .expect("Failed to spawn IntrospectionActor");
+
+    // Start monitoring both actors
+    let _ = introspection_ref
+        .call(
+            |reply| {
+                ShellProtocolMessage::StartMonitoring("get_monitors_test_actor1".to_string(), reply)
+            },
+            Some(DEFAULT_RPC_TIMEOUT),
+        )
+        .await;
+
+    let _ = introspection_ref
+        .call(
+            |reply| {
+                ShellProtocolMessage::StartMonitoring("get_monitors_test_actor2".to_string(), reply)
+            },
+            Some(DEFAULT_RPC_TIMEOUT),
+        )
+        .await;
+
+    // Get monitored actors
+    let result = introspection_ref
+        .call(
+            ShellProtocolMessage::GetMonitoredActors,
+            Some(DEFAULT_RPC_TIMEOUT),
+        )
+        .await;
+
+    match result {
+        Ok(ractor::rpc::CallResult::Success(monitored)) => {
+            assert_eq!(monitored.len(), 2, "Should have 2 monitored actors");
+            assert!(
+                monitored.contains(&"get_monitors_test_actor1".to_string()),
+                "Should contain test_actor1"
+            );
+            assert!(
+                monitored.contains(&"get_monitors_test_actor2".to_string()),
+                "Should contain test_actor2"
+            );
+        }
+        other => panic!("Expected Success with monitored list, got {:?}", other),
+    }
+
+    test_actor1.stop(None);
+    test_actor2.stop(None);
+    introspection_ref.stop(None);
+}
+
+#[tokio::test]
+async fn IntrospectionActor___poll_monitor_events___returns_empty_batch_initially() {
+    let args = IntrospectionArgs {
+        node_name: "poll_events_test_node".to_string(),
+        tracing_handle: None,
+    };
+
+    let (introspection_ref, _handle) = Actor::spawn(
+        Some("poll_events_introspection".to_string()),
+        IntrospectionActor,
+        args,
+    )
+    .await
+    .expect("Failed to spawn IntrospectionActor");
+
+    // Poll for events without monitoring anything
+    let result = introspection_ref
+        .call(
+            ShellProtocolMessage::PollMonitorEvents,
+            Some(DEFAULT_RPC_TIMEOUT),
+        )
+        .await;
+
+    match result {
+        Ok(ractor::rpc::CallResult::Success(batch)) => {
+            assert!(batch.events.is_empty(), "Should have no events initially");
+            assert_eq!(batch.dropped_count, 0, "Should have no dropped events");
+        }
+        other => panic!("Expected empty batch, got {:?}", other),
+    }
+
+    introspection_ref.stop(None);
+}

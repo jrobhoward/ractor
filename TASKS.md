@@ -122,6 +122,7 @@
 - [x] `pg list` - Lists all process groups on remote node
 - [x] `stop` - Stops an actor on remote node (with proper error reporting)
 - [x] `tree` - Shows process group tree on remote node
+- [x] `monitor` / `unmonitor` / `monitors` - Remote monitoring with status-based polling
 
 ### Need Remote Support:
 
@@ -141,10 +142,14 @@
   - Returns all process groups with their members in one RPC call
   - Local tree now uses `pg::which_groups()` for dynamic discovery (no more hardcoded list)
 
-- [ ] **Add remote `monitor` / `unmonitor` / `monitors` commands**
-  - More complex - need to relay lifecycle events back to shell
-  - May need persistent subscription mechanism
-  - ~2 hours
+- [x] **Add remote `monitor` / `unmonitor` / `monitors` commands** ✅ COMPLETE
+  - Added `StartMonitoring(String, RpcReplyPort<bool>)` to protocol
+  - Added `StopMonitoring(String, RpcReplyPort<bool>)` to protocol
+  - Added `GetMonitoredActors(RpcReplyPort<Vec<String>>)` to protocol
+  - Added `PollMonitorEvents(RpcReplyPort<MonitorEventBatch>)` to protocol
+  - IntrospectionActor tracks monitored actors and their status changes
+  - Added `monitor events` command to poll and display events from remote node
+  - Local events displayed automatically, remote events via polling
 
 ### Remote `top` Support:
 
@@ -385,7 +390,7 @@ These items need modifications to ractor core. Keep changes minimal.
 
 ## PR Checklist
 
-- [x] All tests pass: `cargo test --package ractor_shell` (200 tests)
+- [x] All tests pass: `cargo test --package ractor_shell` (206 tests)
 - [x] Clippy passes: `cargo clippy --package ractor_shell -- -D clippy::all -D warnings`
 - [x] Rustfmt passes: `cargo fmt --package ractor_shell -- --check`
 - [x] Documentation builds: `cargo doc --package ractor_shell --no-deps`
