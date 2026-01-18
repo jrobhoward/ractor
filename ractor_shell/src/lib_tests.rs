@@ -546,3 +546,70 @@ fn parse_line___alias_t___returns_top_variant() {
 
     assert!(matches!(cmd, ShellCommand::Top));
 }
+
+// ==================== parse_line: Trace Level Command ====================
+
+#[test]
+fn parse_line___trace_level_without_arg___returns_trace_level_with_none() {
+    let cmd = ShellCommand::parse_line("trace level").unwrap();
+
+    match cmd {
+        ShellCommand::TraceLevel { level } => assert!(level.is_none()),
+        _ => panic!("Expected TraceLevel command"),
+    }
+}
+
+#[test]
+fn parse_line___trace_level_with_info___returns_trace_level_with_info() {
+    let cmd = ShellCommand::parse_line("trace level INFO").unwrap();
+
+    match cmd {
+        ShellCommand::TraceLevel { level } => assert_eq!(level, Some("INFO".to_string())),
+        _ => panic!("Expected TraceLevel command"),
+    }
+}
+
+#[test]
+fn parse_line___trace_level_with_lowercase___returns_trace_level_with_value() {
+    let cmd = ShellCommand::parse_line("trace level debug").unwrap();
+
+    match cmd {
+        ShellCommand::TraceLevel { level } => assert_eq!(level, Some("debug".to_string())),
+        _ => panic!("Expected TraceLevel command"),
+    }
+}
+
+// ==================== should_display_level Tests ====================
+
+use crate::should_display_level;
+use crate::tracing::MinLevel;
+
+#[test]
+fn should_display_level___trace_event_with_trace_min___returns_true() {
+    assert!(should_display_level(&MinLevel::Trace, &MinLevel::Trace));
+}
+
+#[test]
+fn should_display_level___debug_event_with_info_min___returns_false() {
+    assert!(!should_display_level(&MinLevel::Debug, &MinLevel::Info));
+}
+
+#[test]
+fn should_display_level___info_event_with_info_min___returns_true() {
+    assert!(should_display_level(&MinLevel::Info, &MinLevel::Info));
+}
+
+#[test]
+fn should_display_level___warn_event_with_info_min___returns_true() {
+    assert!(should_display_level(&MinLevel::Warn, &MinLevel::Info));
+}
+
+#[test]
+fn should_display_level___error_event_with_error_min___returns_true() {
+    assert!(should_display_level(&MinLevel::Error, &MinLevel::Error));
+}
+
+#[test]
+fn should_display_level___info_event_with_error_min___returns_false() {
+    assert!(!should_display_level(&MinLevel::Info, &MinLevel::Error));
+}

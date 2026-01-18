@@ -11,7 +11,7 @@ use tracing_subscriber::layer::Context;
 use tracing_subscriber::registry::LookupSpan;
 use tracing_subscriber::Layer;
 
-use super::filter::TraceFilter;
+use super::filter::{MinLevel, TraceFilter};
 use super::output::{TraceEvent, TraceEventType, TraceOutput, TraceOutputFormat};
 
 /// Handle for controlling the tracing layer at runtime.
@@ -79,6 +79,19 @@ impl TracingHandle {
         filter.patterns().iter().map(|s| s.to_string()).collect()
     }
 
+    /// Set the minimum log level for filtering.
+    /// Events below this level will be filtered out.
+    pub fn set_min_level(&self, level: MinLevel) {
+        let mut filter = self.inner.filter.write().unwrap();
+        filter.set_min_level(level);
+    }
+
+    /// Get the current minimum log level.
+    pub fn min_level(&self) -> MinLevel {
+        let filter = self.inner.filter.read().unwrap();
+        filter.min_level()
+    }
+
     /// Add a file output.
     pub fn add_file_output(
         &self,
@@ -129,6 +142,12 @@ impl TracingHandle {
         }
         let filter = self.inner.filter.read().unwrap();
         filter.matches(actor_name) || actor_id.map(|id| filter.matches_id(id)).unwrap_or(false)
+    }
+
+    /// Check if an event at the given level passes the level filter.
+    fn level_allowed(&self, level: tracing::Level) -> bool {
+        let filter = self.inner.filter.read().unwrap();
+        filter.level_allowed(level)
     }
 
     /// Check if a target (module path) matches the current filter.
@@ -295,6 +314,10 @@ where
             let extensions = span.extensions();
             if let Some(data) = extensions.get::<SpanData>() {
                 if data.is_actor_span {
+                    // Check if the span level passes the minimum level filter
+                    if !self.handle.level_allowed(*span.metadata().level()) {
+                        return;
+                    }
                     let event = TraceEvent {
                         timestamp: Local::now(),
                         actor_id: data.actor_id.clone(),
@@ -320,6 +343,10 @@ where
             let extensions = span.extensions();
             if let Some(data) = extensions.get::<SpanData>() {
                 if data.is_actor_span {
+                    // Check if the span level passes the minimum level filter
+                    if !self.handle.level_allowed(*span.metadata().level()) {
+                        return;
+                    }
                     let event = TraceEvent {
                         timestamp: Local::now(),
                         actor_id: data.actor_id.clone(),
@@ -386,6 +413,11 @@ where
             || self.handle.matches_target(target);
 
         if !matches {
+            return;
+        }
+
+        // Check if the event level passes the minimum level filter
+        if !self.handle.level_allowed(*event.metadata().level()) {
             return;
         }
 

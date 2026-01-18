@@ -207,7 +207,7 @@ pub fn has_dispatcher(actor_name: &str) -> bool {
         .and_then(|r| {
             r.as_ref().map(|m| {
                 m.get(actor_name)
-                    .map_or(false, |entry| entry.dispatcher.is_some())
+                    .is_some_and(|entry| entry.dispatcher.is_some())
             })
         })
         .unwrap_or(false)

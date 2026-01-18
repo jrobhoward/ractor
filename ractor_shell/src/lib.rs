@@ -90,6 +90,29 @@ pub const KNOWN_PROCESS_GROUPS: &[&str] =
 
 use introspection::INTROSPECTION_GROUP;
 use protocol::{ClusterTopology, ShellProtocolMessage, SubscriptionId};
+use tracing::MinLevel;
+
+/// Check if an event at the given level should be displayed based on the minimum level.
+/// Returns true if the event level is >= min_level in severity.
+fn should_display_level(event_level: &MinLevel, min_level: &MinLevel) -> bool {
+    // MinLevel order (least to most severe): Trace, Debug, Info, Warn, Error
+    // Event should display if its severity >= min_level severity
+    let event_severity = match event_level {
+        MinLevel::Trace => 0,
+        MinLevel::Debug => 1,
+        MinLevel::Info => 2,
+        MinLevel::Warn => 3,
+        MinLevel::Error => 4,
+    };
+    let min_severity = match min_level {
+        MinLevel::Trace => 0,
+        MinLevel::Debug => 1,
+        MinLevel::Info => 2,
+        MinLevel::Warn => 3,
+        MinLevel::Error => 4,
+    };
+    event_severity >= min_severity
+}
 
 /// Active remote trace subscription
 pub(crate) struct RemoteTraceSubscription {
@@ -226,6 +249,7 @@ impl ShellState {
             ShellCommand::Top => self.cmd_top().await,
             ShellCommand::Trace { pattern } => self.cmd_trace(pattern).await,
             ShellCommand::TraceOff => self.cmd_trace_off().await,
+            ShellCommand::TraceLevel { level } => self.cmd_trace_level(level).await,
             ShellCommand::TraceToFile { path, pattern } => {
                 self.cmd_trace_to_file(path, pattern).await
             }
@@ -301,12 +325,19 @@ impl ShellState {
                         "trace worker_*".cyan()
                     );
                     println!("  {}            - trace all actors", "trace *".cyan());
+                    println!(
+                        "  {} - filter to INFO level and above",
+                        "trace level INFO".cyan()
+                    );
                     println!("  {}  - stop all tracing", "trace off".cyan());
                 } else {
                     println!("{}", "Active trace patterns:".bold());
                     for p in handle.patterns() {
                         println!("  {}", p.cyan());
                     }
+                    println!();
+                    println!("{}", "Minimum level:".bold());
+                    println!("  {}", handle.min_level().to_string().cyan());
                     println!();
                     println!("{}", "Outputs:".bold());
                     for o in handle.outputs() {
@@ -333,6 +364,79 @@ impl ShellState {
             }
         } else {
             println!("{}", "Tracing not initialized".bright_black());
+        }
+
+        Ok(())
+    }
+
+    /// Get or set the minimum trace log level.
+    async fn cmd_trace_level(&mut self, level: Option<String>) -> ShellResult<()> {
+        // Initialize tracing handle if not already done
+        if self.tracing_handle.is_none() {
+            let (layer, handle) = tracing::ShellTracingLayer::new();
+
+            use tracing_subscriber::layer::SubscriberExt;
+            use tracing_subscriber::util::SubscriberInitExt;
+
+            let _ = tracing_subscriber::registry().with(layer).try_init();
+            self.tracing_handle = Some(handle);
+
+            if !self.quiet {
+                println!("{} Tracing system initialized", "✓".green());
+            }
+        }
+
+        let handle = self.tracing_handle.as_ref().unwrap();
+
+        match level {
+            Some(level_str) => {
+                let min_level: tracing::MinLevel =
+                    level_str
+                        .parse()
+                        .map_err(|e: String| ShellError::InvalidArgument {
+                            command: "trace level",
+                            message: e,
+                        })?;
+                handle.set_min_level(min_level);
+                println!(
+                    "{} Minimum trace level set to: {}",
+                    "✓".green(),
+                    min_level.to_string().cyan()
+                );
+                println!(
+                    "  {}",
+                    "Events below this level will be filtered out.".bright_black()
+                );
+            }
+            None => {
+                let current_level = handle.min_level();
+                println!("{}", "Current minimum trace level:".bold());
+                println!("  {}", current_level.to_string().cyan());
+                println!();
+                println!(
+                    "{}",
+                    "Available levels (from most to least verbose):".bold()
+                );
+                println!("  {} - Show all events", "TRACE".bright_black());
+                println!(
+                    "  {} - Filter out TRACE, show DEBUG and above",
+                    "DEBUG".blue()
+                );
+                println!(
+                    "  {}  - Filter out TRACE/DEBUG, show INFO and above",
+                    "INFO".green()
+                );
+                println!(
+                    "  {}  - Filter out TRACE/DEBUG/INFO, show WARN and above",
+                    "WARN".yellow()
+                );
+                println!("  {} - Show only ERROR events", "ERROR".red());
+                println!();
+                println!(
+                    "{}",
+                    "Usage: trace level <LEVEL>  (e.g., trace level INFO)".bright_black()
+                );
+            }
         }
 
         Ok(())
@@ -408,6 +512,17 @@ impl ShellState {
             .ok_or_else(|| ShellError::NodeNotConnected(node.clone()))?
             .clone();
 
+        // Initialize tracing handle if not already done (needed for level filtering)
+        if self.tracing_handle.is_none() {
+            let (layer, handle) = tracing::ShellTracingLayer::new();
+
+            use tracing_subscriber::layer::SubscriberExt;
+            use tracing_subscriber::util::SubscriberInitExt;
+
+            let _ = tracing_subscriber::registry().with(layer).try_init();
+            self.tracing_handle = Some(handle);
+        }
+
         // Subscribe to traces on the remote node
         let result = introspection_ref
             .call(
@@ -442,6 +557,7 @@ impl ShellState {
         let poll_node = node.clone();
         let poll_ref = introspection_ref.clone();
         let subscriptions = self.remote_trace_subscriptions.clone();
+        let tracing_handle = self.tracing_handle.clone();
 
         let poll_task = tokio::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_millis(100));
@@ -457,8 +573,25 @@ impl ShellState {
                     .await
                 {
                     Ok(CallResult::Success(batch)) => {
+                        // Get current min level for filtering
+                        let min_level = tracing_handle
+                            .as_ref()
+                            .map(|h| h.min_level())
+                            .unwrap_or_default();
+
                         // Display events
                         for event in &batch.events {
+                            // Filter by level - parse the level string and check against min
+                            let event_level: Result<tracing::MinLevel, _> = event.level.parse();
+                            if let Ok(level) = event_level {
+                                // Skip if event level is below minimum
+                                // MinLevel order: Trace < Debug < Info < Warn < Error
+                                // If min is Info, skip Trace and Debug
+                                if !should_display_level(&level, &min_level) {
+                                    continue;
+                                }
+                            }
+
                             let level_str = &event.level;
                             let level_colored = match level_str.as_str() {
                                 "ERROR" => level_str.red(),
@@ -687,18 +820,29 @@ impl ShellState {
                     println!("{}", "trace [pattern]".green().bold());
                     println!("  Trace actor message flow and lifecycle events");
                     println!("\n{}", "Usage:".bold());
-                    println!("  trace              List active traces");
+                    println!("  trace              List active traces and current settings");
                     println!("  trace <pattern>    Start tracing actors matching pattern");
                     println!("  trace off          Stop all tracing");
+                    println!("  trace level        Show current minimum log level");
+                    println!(
+                        "  trace level <LVL>  Set minimum level (TRACE|DEBUG|INFO|WARN|ERROR)"
+                    );
                     println!("\n{}", "Alias:".bold());
                     println!("  tr");
                     println!("\n{}", "Patterns:".bold());
                     println!("  worker_*     Match actors starting with 'worker_'");
                     println!("  *            Match all actors");
                     println!("  supervisor   Match exact name 'supervisor'");
+                    println!("\n{}", "Log Levels (most to least verbose):".bold());
+                    println!("  TRACE        Show all events (default)");
+                    println!("  DEBUG        Filter out TRACE events");
+                    println!("  INFO         Filter out TRACE and DEBUG events");
+                    println!("  WARN         Show only WARN and ERROR events");
+                    println!("  ERROR        Show only ERROR events");
                     println!("\n{}", "Examples:".bold());
                     println!("  trace worker_*     Start tracing worker actors");
                     println!("  trace *            Trace all actors");
+                    println!("  trace level INFO   Show only INFO, WARN, ERROR events");
                     println!("  trace off          Stop tracing");
                     println!("\n{}", "Note:".bold());
                     println!("  Traces show actor span enter/exit and tracing events.");
@@ -1241,7 +1385,7 @@ impl ShellState {
                     if let Some(introspection_ref) = self.connected_nodes.get(node_name) {
                         let result = introspection_ref
                             .call(
-                                |reply| ShellProtocolMessage::ListSchemaActors(reply),
+                                ShellProtocolMessage::ListSchemaActors,
                                 Some(DEFAULT_RPC_TIMEOUT),
                             )
                             .await
@@ -2983,6 +3127,8 @@ pub enum ShellCommand {
     Trace { pattern: Option<String> },
     /// Stop all tracing. Usage: `trace off`
     TraceOff,
+    /// Get or set minimum trace log level. Usage: `trace level [LEVEL]`
+    TraceLevel { level: Option<String> },
     /// Log traces to a file. Usage: `trace-to-file <path> [pattern]`
     TraceToFile {
         path: String,
@@ -3217,15 +3363,21 @@ impl ShellCommand {
             "trace" => {
                 match parts.get(1).copied() {
                     Some("off") => Ok(ShellCommand::TraceOff),
+                    Some("level") => {
+                        // "trace level" or "trace level <LEVEL>"
+                        Ok(ShellCommand::TraceLevel {
+                            level: parts.get(2).map(|s| s.to_string()),
+                        })
+                    }
                     Some("remote") => {
                         // "trace remote off" or "trace remote <node> <pattern>"
                         if parts.get(2).copied() == Some("off") {
                             Ok(ShellCommand::TraceRemoteOff)
                         } else if parts.len() < 4 {
-                            return Err(ShellError::MissingArgument {
+                            Err(ShellError::MissingArgument {
                                 command: "trace remote",
                                 requirement: "<node> <pattern> or 'off'",
-                            });
+                            })
                         } else {
                             Ok(ShellCommand::TraceRemote {
                                 node: parts[2].to_string(),

@@ -45,6 +45,13 @@ pub enum ShellError {
         subcommand: String,
     },
 
+    /// Invalid argument value for a command.
+    #[error("{command}: {message}")]
+    InvalidArgument {
+        command: &'static str,
+        message: String,
+    },
+
     /// RPC call timed out.
     #[error("RPC call timed out after {0:?}")]
     RpcTimeout(Duration),

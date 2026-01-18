@@ -1,6 +1,69 @@
 //! Pattern-based filtering for actor traces.
 
 use std::collections::HashSet;
+use std::str::FromStr;
+
+use tracing::Level;
+
+/// Minimum log level for filtering trace events.
+/// Events at or above this level will be shown.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MinLevel {
+    /// Show all events (TRACE and above)
+    #[default]
+    Trace,
+    /// Show DEBUG and above (filter out TRACE)
+    Debug,
+    /// Show INFO and above (filter out TRACE, DEBUG)
+    Info,
+    /// Show WARN and above (filter out TRACE, DEBUG, INFO)
+    Warn,
+    /// Show only ERROR events
+    Error,
+}
+
+impl MinLevel {
+    /// Check if an event at the given level passes this filter.
+    pub fn allows(&self, level: Level) -> bool {
+        match self {
+            MinLevel::Trace => true,
+            MinLevel::Debug => level <= Level::DEBUG,
+            MinLevel::Info => level <= Level::INFO,
+            MinLevel::Warn => level <= Level::WARN,
+            MinLevel::Error => level <= Level::ERROR,
+        }
+    }
+}
+
+impl FromStr for MinLevel {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_uppercase().as_str() {
+            "TRACE" => Ok(MinLevel::Trace),
+            "DEBUG" => Ok(MinLevel::Debug),
+            "INFO" => Ok(MinLevel::Info),
+            "WARN" | "WARNING" => Ok(MinLevel::Warn),
+            "ERROR" => Ok(MinLevel::Error),
+            _ => Err(format!(
+                "Invalid log level '{}'. Valid levels: TRACE, DEBUG, INFO, WARN, ERROR",
+                s
+            )),
+        }
+    }
+}
+
+impl std::fmt::Display for MinLevel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            MinLevel::Trace => write!(f, "TRACE"),
+            MinLevel::Debug => write!(f, "DEBUG"),
+            MinLevel::Info => write!(f, "INFO"),
+            MinLevel::Warn => write!(f, "WARN"),
+            MinLevel::Error => write!(f, "ERROR"),
+        }
+    }
+}
 
 /// Filter for selecting which actors to trace.
 #[derive(Debug, Clone)]
@@ -9,6 +72,8 @@ pub struct TraceFilter {
     patterns: HashSet<String>,
     /// Whether to trace all actors (empty patterns = trace nothing, "*" = trace all)
     trace_all: bool,
+    /// Minimum log level to display (events below this level are filtered out)
+    min_level: MinLevel,
 }
 
 impl Default for TraceFilter {
@@ -23,6 +88,7 @@ impl TraceFilter {
         Self {
             patterns: HashSet::new(),
             trace_all: false,
+            min_level: MinLevel::default(),
         }
     }
 
@@ -31,7 +97,23 @@ impl TraceFilter {
         Self {
             patterns: HashSet::new(),
             trace_all: true,
+            min_level: MinLevel::default(),
         }
+    }
+
+    /// Set the minimum log level for filtering.
+    pub fn set_min_level(&mut self, level: MinLevel) {
+        self.min_level = level;
+    }
+
+    /// Get the current minimum log level.
+    pub fn min_level(&self) -> MinLevel {
+        self.min_level
+    }
+
+    /// Check if an event at the given level passes the level filter.
+    pub fn level_allowed(&self, level: Level) -> bool {
+        self.min_level.allows(level)
     }
 
     /// Add a pattern to the filter.
@@ -62,6 +144,7 @@ impl TraceFilter {
     pub fn clear(&mut self) {
         self.patterns.clear();
         self.trace_all = false;
+        self.min_level = MinLevel::default();
     }
 
     /// Check if any patterns are active.

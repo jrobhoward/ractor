@@ -254,7 +254,7 @@ impl Actor for IntrospectionActor {
 
                     let serializable_events: Vec<SerializableTraceEvent> = events
                         .iter()
-                        .map(|e| SerializableTraceEvent::from_trace_event(e))
+                        .map(SerializableTraceEvent::from_trace_event)
                         .collect();
 
                     let batch = TraceEventBatch {

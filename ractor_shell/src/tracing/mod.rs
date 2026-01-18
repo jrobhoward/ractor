@@ -28,6 +28,6 @@ mod filter;
 mod layer;
 mod output;
 
-pub use filter::TraceFilter;
+pub use filter::{MinLevel, TraceFilter};
 pub use layer::{ShellTracingLayer, TracingHandle};
 pub use output::{TraceEvent, TraceEventType, TraceOutput, TraceOutputFormat};

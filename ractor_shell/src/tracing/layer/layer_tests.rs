@@ -127,3 +127,42 @@ fn tracing_handle_clear_file_outputs___keeps_console() {
 // Note: FieldVisitor tests removed because tracing::field::Field::new is not public.
 // The FieldVisitor implementation is tested indirectly through integration tests
 // with actual tracing spans and events.
+
+#[test]
+fn tracing_handle_min_level___default_is_trace() {
+    let (_, handle) = ShellTracingLayer::new();
+
+    assert_eq!(handle.min_level(), MinLevel::Trace);
+}
+
+#[test]
+fn tracing_handle_set_min_level___updates_level() {
+    let (_, handle) = ShellTracingLayer::new();
+
+    handle.set_min_level(MinLevel::Info);
+
+    assert_eq!(handle.min_level(), MinLevel::Info);
+}
+
+#[test]
+fn tracing_handle_level_allowed___respects_min_level() {
+    let (_, handle) = ShellTracingLayer::new();
+    handle.set_min_level(MinLevel::Warn);
+
+    assert!(!handle.level_allowed(tracing::Level::TRACE));
+    assert!(!handle.level_allowed(tracing::Level::DEBUG));
+    assert!(!handle.level_allowed(tracing::Level::INFO));
+    assert!(handle.level_allowed(tracing::Level::WARN));
+    assert!(handle.level_allowed(tracing::Level::ERROR));
+}
+
+#[test]
+fn tracing_handle_trace_off___resets_min_level() {
+    let (_, handle) = ShellTracingLayer::new();
+    handle.trace("*");
+    handle.set_min_level(MinLevel::Error);
+
+    handle.trace_off();
+
+    assert_eq!(handle.min_level(), MinLevel::Trace);
+}

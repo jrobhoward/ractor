@@ -158,3 +158,130 @@ fn filter_multiple_patterns___any_match___returns_true() {
     assert!(filter.matches(Some("monitor")));
     assert!(!filter.matches(Some("other")));
 }
+
+// MinLevel tests
+
+#[test]
+fn min_level___from_str___parses_valid_levels() {
+    assert_eq!("TRACE".parse::<MinLevel>().unwrap(), MinLevel::Trace);
+    assert_eq!("trace".parse::<MinLevel>().unwrap(), MinLevel::Trace);
+    assert_eq!("DEBUG".parse::<MinLevel>().unwrap(), MinLevel::Debug);
+    assert_eq!("debug".parse::<MinLevel>().unwrap(), MinLevel::Debug);
+    assert_eq!("INFO".parse::<MinLevel>().unwrap(), MinLevel::Info);
+    assert_eq!("info".parse::<MinLevel>().unwrap(), MinLevel::Info);
+    assert_eq!("WARN".parse::<MinLevel>().unwrap(), MinLevel::Warn);
+    assert_eq!("warn".parse::<MinLevel>().unwrap(), MinLevel::Warn);
+    assert_eq!("WARNING".parse::<MinLevel>().unwrap(), MinLevel::Warn);
+    assert_eq!("ERROR".parse::<MinLevel>().unwrap(), MinLevel::Error);
+    assert_eq!("error".parse::<MinLevel>().unwrap(), MinLevel::Error);
+}
+
+#[test]
+fn min_level___from_str___rejects_invalid_levels() {
+    assert!("INVALID".parse::<MinLevel>().is_err());
+    assert!("".parse::<MinLevel>().is_err());
+    assert!("123".parse::<MinLevel>().is_err());
+}
+
+#[test]
+fn min_level___display___formats_correctly() {
+    assert_eq!(MinLevel::Trace.to_string(), "TRACE");
+    assert_eq!(MinLevel::Debug.to_string(), "DEBUG");
+    assert_eq!(MinLevel::Info.to_string(), "INFO");
+    assert_eq!(MinLevel::Warn.to_string(), "WARN");
+    assert_eq!(MinLevel::Error.to_string(), "ERROR");
+}
+
+#[test]
+fn min_level_trace___allows___all_levels() {
+    let level = MinLevel::Trace;
+
+    assert!(level.allows(Level::TRACE));
+    assert!(level.allows(Level::DEBUG));
+    assert!(level.allows(Level::INFO));
+    assert!(level.allows(Level::WARN));
+    assert!(level.allows(Level::ERROR));
+}
+
+#[test]
+fn min_level_debug___allows___debug_and_above() {
+    let level = MinLevel::Debug;
+
+    assert!(!level.allows(Level::TRACE));
+    assert!(level.allows(Level::DEBUG));
+    assert!(level.allows(Level::INFO));
+    assert!(level.allows(Level::WARN));
+    assert!(level.allows(Level::ERROR));
+}
+
+#[test]
+fn min_level_info___allows___info_and_above() {
+    let level = MinLevel::Info;
+
+    assert!(!level.allows(Level::TRACE));
+    assert!(!level.allows(Level::DEBUG));
+    assert!(level.allows(Level::INFO));
+    assert!(level.allows(Level::WARN));
+    assert!(level.allows(Level::ERROR));
+}
+
+#[test]
+fn min_level_warn___allows___warn_and_above() {
+    let level = MinLevel::Warn;
+
+    assert!(!level.allows(Level::TRACE));
+    assert!(!level.allows(Level::DEBUG));
+    assert!(!level.allows(Level::INFO));
+    assert!(level.allows(Level::WARN));
+    assert!(level.allows(Level::ERROR));
+}
+
+#[test]
+fn min_level_error___allows___only_error() {
+    let level = MinLevel::Error;
+
+    assert!(!level.allows(Level::TRACE));
+    assert!(!level.allows(Level::DEBUG));
+    assert!(!level.allows(Level::INFO));
+    assert!(!level.allows(Level::WARN));
+    assert!(level.allows(Level::ERROR));
+}
+
+#[test]
+fn filter_new___default_level___is_trace() {
+    let filter = TraceFilter::new();
+
+    assert_eq!(filter.min_level(), MinLevel::Trace);
+}
+
+#[test]
+fn filter_set_min_level___updates_level() {
+    let mut filter = TraceFilter::new();
+
+    filter.set_min_level(MinLevel::Info);
+
+    assert_eq!(filter.min_level(), MinLevel::Info);
+}
+
+#[test]
+fn filter_level_allowed___respects_min_level() {
+    let mut filter = TraceFilter::new();
+    filter.set_min_level(MinLevel::Info);
+
+    assert!(!filter.level_allowed(Level::TRACE));
+    assert!(!filter.level_allowed(Level::DEBUG));
+    assert!(filter.level_allowed(Level::INFO));
+    assert!(filter.level_allowed(Level::WARN));
+    assert!(filter.level_allowed(Level::ERROR));
+}
+
+#[test]
+fn filter_clear___resets_level_to_trace() {
+    let mut filter = TraceFilter::new();
+    filter.set_min_level(MinLevel::Error);
+    filter.add_pattern("*");
+
+    filter.clear();
+
+    assert_eq!(filter.min_level(), MinLevel::Trace);
+}

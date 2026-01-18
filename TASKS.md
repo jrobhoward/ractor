@@ -61,11 +61,15 @@
   - No changes needed - current architecture is sound
 
 - [ ] **Enable Raft debug logging in shell tracing**
-  - Add tracing instrumentation to Raft message handlers in `raft.rs`
-  - Show RequestVote, VoteResponse, Heartbeat messages in `trace` output
-  - Include term numbers, candidate/leader names, vote decisions
-  - Consider adding a `trace raft` filter or `raft trace` command
-  - File: `ractor_shell/examples/cluster_demo/raft.rs` (lines 296-362)
+  - Raft already has `tracing::info!` calls but they use custom field names (`node`, `term`)
+  - Shell tracing expects `actor_name` or `actor_id` fields to match patterns like `raft_node`
+  - Options to fix:
+    1. Update Raft tracing calls to include `actor_name` field: `tracing::info!(actor_name = "raft_node", ...)`
+    2. Make shell tracing match against any field value, not just `actor_name`/`actor_id`
+    3. Add `trace raft` command that specifically captures Raft-related module paths
+  - Current workaround: Use `trace remote <node> *` to capture all events
+  - File: `ractor_shell/examples/cluster_demo/raft.rs` (tracing calls throughout)
+  - File: `ractor_shell/src/tracing/layer.rs:339-408` (event filtering logic)
 
 - [ ] **Add command to trigger fresh leader election**
   - New shell command: `raft election` or `raft stepdown`
@@ -76,6 +80,24 @@
   - Show current term, voted_for, election generation
   - Show peer connection status (connected/disconnected)
   - Show time since last heartbeat received
+
+- [ ] **Investigate raft_node behavior on node failure** (LIKELY RACTOR_CLUSTER BUG)
+  - **Observed**: When node_a was killed, local actors on node_c became unreachable
+  - **Symptoms**:
+    - Node_c process still running after node_a killed
+    - NodeServer still accepting connections
+    - But `call raft_node GetStatus {}` returns SendErr
+    - IntrospectionActor not found in registry
+  - **Debug logs show**:
+    - TCP session closed cleanly: `Node session node_a exited with 'tcp_session_closed'`
+    - No actor stop/fail events logged
+    - No panics or errors
+  - **Expected**: Local actors should survive remote node failures
+  - **Root cause**: Unknown - likely in ractor_cluster's NodeSession cleanup logic
+  - **Files to investigate**:
+    - `ractor_cluster/src/node/node_session.rs` - cleanup on disconnect
+    - `ractor_cluster/src/node/mod.rs` - NodeServer supervision handling
+  - **This is a ractor_cluster issue, not ractor_shell**
 
 ---
 
