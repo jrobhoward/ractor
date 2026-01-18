@@ -54,7 +54,11 @@
 **Value**: HIGH - Essential for observing and debugging Raft cluster behavior
 **Core Changes**: None
 
-Currently, Raft messages are invisible in shell tracing because they're tunneled as JSON through `DynamicMessage` via the introspection actor, bypassing ractor_cluster's network-level tracing.
+- [x] **DynamicMessage investigation** ✅
+  - DynamicMessage is still used and necessary for `send` command and flexible debugging
+  - Raft already uses typed `RaftMessage` with schema registration (not DynamicMessage)
+  - Two approaches coexist appropriately: DynamicMessage for flexibility, typed schemas for performance
+  - No changes needed - current architecture is sound
 
 - [ ] **Enable Raft debug logging in shell tracing**
   - Add tracing instrumentation to Raft message handlers in `raft.rs`
@@ -215,6 +219,50 @@ Currently, Raft messages are invisible in shell tracing because they're tunneled
 
 ---
 
+## Priority 10: Schema-Based Generic RPC Dispatch (Long-term Investigation)
+
+**Estimated Time**: Unknown - Research required
+**Value**: LOW (workarounds exist)
+**Difficulty**: VERY HIGH
+**Core Changes**: Potentially significant
+
+**Problem**: Remote typed RPC to cluster actors requires compile-time knowledge of message types. When actors are in example code (not the library), the introspection layer can't directly call typed RPCs.
+
+**Current Workarounds**:
+1. ✅ Actors implement DynamicMessage wrapper (works, requires per-actor code)
+2. ✅ Use remote tracing to observe behavior (passive observation)
+3. ✅ Local typed RPC works fine (same process)
+
+**Long-term Solution** (investigate feasibility):
+Build a generic RPC dispatcher using the `#[ractor_shell]` schema registry that can:
+- Parse variant names and field types from schema metadata
+- Construct typed messages from JSON at runtime
+- Handle RpcReplyPort creation and response routing
+- Support both Cast and Call variants generically
+
+**Technical Challenges**:
+1. Runtime type construction in Rust (no reflection)
+2. RpcReplyPort<T> creation requires knowing T at compile time
+3. Variant construction from JSON requires custom deserialization logic
+4. Error handling for malformed JSON/wrong types
+5. Performance overhead vs. compile-time dispatch
+
+**Research Questions**:
+- Can we use `Any` + downcasting for reply ports?
+- Can macro generate constructor functions stored in registry?
+- What's the performance impact of runtime dispatch?
+- How does this interact with cluster serialization?
+
+**Why Low Priority**:
+- DynamicMessage wrapper pattern works well
+- Only affects example/user code, not library
+- Adds significant complexity for marginal benefit
+- Better to document the pattern than build complex infrastructure
+
+**Decision**: Document as future investigation. Current DynamicMessage pattern is the recommended approach for custom typed actors.
+
+---
+
 ## Requires Ractor Core Changes
 
 These items need modifications to ractor core. Keep changes minimal.
@@ -267,7 +315,7 @@ These items need modifications to ractor core. Keep changes minimal.
 | Remote connection | `connect`, `use` | `-remsh`, `net_adm:ping/1` | ✅ Implemented |
 | Cluster topology | `cluster` commands | `nodes()`, observer | ✅ Implemented |
 | Monitoring | `monitor`/`unmonitor` | `erlang:monitor/2` | ✅ Implemented |
-| Message sending | `send`, `call` | Direct calls | ✅ DynamicMessage only |
+| Message sending | `send`, `call` | Direct calls | ✅ DynamicMessage + typed schemas |
 | Top/Dashboard TUI | `top` | observer_cli | ✅ Phase 1 Complete |
 | Tracing | `trace`, `trace-to-file` | `dbg`, trace BIFs | ✅ Complete |
 | **Supervision trees** | `supervtree`, `parent` | Observer supervision view | ✅ **Complete** (local + remote) |

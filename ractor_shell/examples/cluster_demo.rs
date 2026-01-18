@@ -58,7 +58,8 @@ use ractor::Actor;
 use ractor_cluster::node::{client, NodeConnectionMode};
 use ractor_cluster::NodeServer;
 
-use cluster_demo::raft::{RaftConfig, RaftNode, RAFT_CLUSTER_GROUP};
+use cluster_demo::raft::{RaftConfig, RAFT_CLUSTER_GROUP};
+use cluster_demo::raft_supervisor::{RaftSupervisor, RaftSupervisorArgs};
 use cluster_demo::{DemoActor, DynamicDemoActor};
 use ractor_shell::completer::{get_known_process_groups, update_completer_state, ShellHelper};
 use ractor_shell::config::ShellConfig;
@@ -253,10 +254,20 @@ async fn run_node(
         heartbeat_interval_ms: heartbeat_interval,
     };
 
-    let (_raft_ref, _) = Actor::spawn(Some("raft_node".to_string()), RaftNode, raft_config).await?;
+    let supervisor_args = RaftSupervisorArgs {
+        config: raft_config,
+        max_restarts: 5,
+    };
+
+    let (_supervisor_ref, _) = Actor::spawn(
+        Some("raft_supervisor".to_string()),
+        RaftSupervisor,
+        supervisor_args,
+    )
+    .await?;
 
     println!(
-        "{} RaftNode ready (joined '{}' group)",
+        "{} RaftNode ready with supervision (joined '{}' group)",
         "OK".green(),
         RAFT_CLUSTER_GROUP
     );
