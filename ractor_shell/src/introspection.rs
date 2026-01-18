@@ -186,6 +186,19 @@ impl Actor for IntrospectionActor {
                 let _ = reply.send(actors);
             }
 
+            ShellProtocolMessage::GetProcessGroupTree(reply) => {
+                let groups = pg::which_groups();
+                let mut tree: HashMap<String, Vec<ActorInfo>> = HashMap::new();
+
+                for group in groups {
+                    let members = pg::get_members(&group);
+                    let actors: Vec<ActorInfo> = members.iter().map(ActorInfo::from_cell).collect();
+                    tree.insert(group, actors);
+                }
+
+                let _ = reply.send(tree);
+            }
+
             ShellProtocolMessage::GetActorInfo(name, reply) => {
                 let info = registry::where_is(name).map(|cell| ActorInfo::from_cell(&cell));
 

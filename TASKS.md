@@ -4,7 +4,7 @@
 **Goal**: Rust-ractor counterpart for Erlang/OTP's shell & observer
 **Status**: Core features complete. Enhancements in progress.
 
-**Recent Completion**: Remote `stop` and `pg list` commands now work! The `stop` command properly reports errors when an actor is not found on the remote node.
+**Recent Completion**: Remote `stop`, `pg list`, and `tree` commands now work! All process group operations are now remote-capable.
 
 **Erlang/OTP Comparison**: See [Feature Comparison](#erlang-otp-feature-comparison) section.
 
@@ -121,6 +121,7 @@
 - [x] `pg members` - Lists process group members from remote node
 - [x] `pg list` - Lists all process groups on remote node
 - [x] `stop` - Stops an actor on remote node (with proper error reporting)
+- [x] `tree` - Shows process group tree on remote node
 
 ### Need Remote Support:
 
@@ -135,9 +136,10 @@
   - IntrospectionActor calls `pg::which_groups()`
   - Shell displays list of all process groups on remote node
 
-- [ ] **Add remote `tree` command** (process group tree)
-  - Add `GetProcessGroupTree(RpcReplyPort<...>)` to protocol
-  - ~45 minutes
+- [x] **Add remote `tree` command** (process group tree) ✅ COMPLETE
+  - Added `GetProcessGroupTree(RpcReplyPort<HashMap<String, Vec<ActorInfo>>>)` to protocol
+  - Returns all process groups with their members in one RPC call
+  - Local tree now uses `pg::which_groups()` for dynamic discovery (no more hardcoded list)
 
 - [ ] **Add remote `monitor` / `unmonitor` / `monitors` commands**
   - More complex - need to relay lifecycle events back to shell
@@ -383,7 +385,7 @@ These items need modifications to ractor core. Keep changes minimal.
 
 ## PR Checklist
 
-- [x] All tests pass: `cargo test --package ractor_shell` (199 tests)
+- [x] All tests pass: `cargo test --package ractor_shell` (200 tests)
 - [x] Clippy passes: `cargo clippy --package ractor_shell -- -D clippy::all -D warnings`
 - [x] Rustfmt passes: `cargo fmt --package ractor_shell -- --check`
 - [x] Documentation builds: `cargo doc --package ractor_shell --no-deps`

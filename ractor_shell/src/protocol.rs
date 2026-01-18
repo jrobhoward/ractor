@@ -61,6 +61,10 @@ pub enum ShellProtocolMessage {
     #[rpc]
     GetProcessGroupMembers(String, RpcReplyPort<Vec<ActorInfo>>),
 
+    /// Get all process groups with their members (for tree display)
+    #[rpc]
+    GetProcessGroupTree(RpcReplyPort<HashMap<String, Vec<ActorInfo>>>),
+
     /// Get detailed info about a specific actor
     #[rpc]
     GetActorInfo(String, RpcReplyPort<Option<ActorInfo>>),

@@ -2751,83 +2751,105 @@ impl ShellState {
         println!();
         println!("{}", "Process Group Tree".bold().underline());
         println!();
-        println!(
-            "{}",
-            "Note: Full supervision tree introspection requires ractor core API enhancements."
-                .yellow()
-        );
-        println!(
-            "{}",
-            "      Showing process group organization as a simplified tree.".yellow()
-        );
-        println!();
 
-        // For now, show process groups as a simple tree structure
-        // In the future, this would show actual parent/child supervision relationships
-
-        if self.connected_nodes.is_empty() {
-            // Local tree
-            let known_groups = KNOWN_PROCESS_GROUPS;
-
-            for group in known_groups {
-                let members = pg::get_members(&group.to_string());
-                if !members.is_empty() {
-                    println!("{} {}", "├──".bright_cyan(), group.green().bold());
-                    for (i, cell) in members.iter().enumerate() {
-                        let is_last = i == members.len() - 1;
-                        let prefix = if is_last { "└──" } else { "├──" };
-                        let actor_name = cell.get_name().unwrap_or_else(|| "-".to_string());
-                        let actor_id = cell.get_id().to_string();
-                        println!(
-                            "{}   {} {} {}",
-                            "│".bright_cyan(),
-                            prefix.bright_cyan(),
-                            actor_name.cyan(),
-                            format!("({})", actor_id).bright_black()
-                        );
-                    }
-                    println!();
-                }
+        // Helper function to display the tree
+        fn display_tree(tree: &std::collections::HashMap<String, Vec<crate::protocol::ActorInfo>>) {
+            if tree.is_empty() {
+                println!("No process groups found");
+                return;
             }
-        } else {
-            // Use cluster topology if available
-            if let Some(ref topology) = self.cluster_topology {
-                for (group_name, members) in &topology.process_groups {
-                    println!("{} {}", "├──".bright_cyan(), group_name.green().bold());
-                    for (i, member) in members.iter().enumerate() {
-                        let is_last = i == members.len() - 1;
-                        let prefix = if is_last { "└──" } else { "├──" };
-                        let actor_name =
-                            member.actor_name.clone().unwrap_or_else(|| "-".to_string());
-                        let node_info = format!("on {}", member.node_name);
-                        println!(
-                            "{}   {} {} {} {}",
-                            "│".bright_cyan(),
-                            prefix.bright_cyan(),
-                            actor_name.cyan(),
-                            format!("({})", member.actor_id).bright_black(),
-                            node_info.bright_black()
-                        );
-                    }
-                    println!();
+
+            let group_names: Vec<_> = tree.keys().collect();
+            for (group_idx, group_name) in group_names.iter().enumerate() {
+                let is_last_group = group_idx == group_names.len() - 1;
+                let group_prefix = if is_last_group {
+                    "└──"
+                } else {
+                    "├──"
+                };
+                let members = tree.get(*group_name).unwrap();
+
+                println!(
+                    "{} {} {}",
+                    group_prefix.bright_cyan(),
+                    group_name.green().bold(),
+                    format!("[{} members]", members.len()).bright_black()
+                );
+
+                for (i, actor) in members.iter().enumerate() {
+                    let is_last = i == members.len() - 1;
+                    let prefix = if is_last { "└──" } else { "├──" };
+                    let connector = if is_last_group { " " } else { "│" };
+                    let actor_name = actor.name.clone().unwrap_or_else(|| "-".to_string());
+                    let local_marker = if actor.is_local { "" } else { " (remote)" };
+                    println!(
+                        "{}   {} {} {}{}",
+                        connector.bright_cyan(),
+                        prefix.bright_cyan(),
+                        actor_name.cyan(),
+                        format!("({})", actor.id).bright_black(),
+                        local_marker.bright_black()
+                    );
                 }
-            } else {
-                println!("No cluster topology available. Connect to a node first.");
+                println!();
             }
         }
 
+        // Check if we're working with a remote node
+        if let Some(node_name) = &self.current_node {
+            if let Some(introspection_ref) = self.connected_nodes.get(node_name) {
+                let result = introspection_ref
+                    .call(
+                        ShellProtocolMessage::GetProcessGroupTree,
+                        Some(DEFAULT_RPC_TIMEOUT),
+                    )
+                    .await
+                    .map_err(ShellError::messaging)?;
+
+                match result {
+                    CallResult::Success(tree) => {
+                        println!(
+                            "{}",
+                            format!("Process groups on {} ({} total):", node_name, tree.len())
+                                .bright_black()
+                        );
+                        println!();
+                        display_tree(&tree);
+                    }
+                    CallResult::Timeout => return Err(ShellError::rpc_timeout()),
+                    CallResult::SenderError => return Err(ShellError::RpcSenderError),
+                }
+                return Ok(());
+            } else {
+                return Err(ShellError::NodeNotConnected(node_name.clone()));
+            }
+        }
+
+        // Local execution - use pg::which_groups() for dynamic group discovery
+        let groups = pg::which_groups();
+        let mut tree: std::collections::HashMap<String, Vec<crate::protocol::ActorInfo>> =
+            std::collections::HashMap::new();
+
+        for group in groups {
+            let members = pg::get_members(&group);
+            let actors: Vec<crate::protocol::ActorInfo> = members
+                .iter()
+                .map(crate::protocol::ActorInfo::from_cell)
+                .collect();
+            tree.insert(group, actors);
+        }
+
+        println!(
+            "{}",
+            format!("Process groups ({} total):", tree.len()).bright_black()
+        );
         println!();
-        println!("{}", "Future Enhancement:".bright_black());
+        display_tree(&tree);
+
         println!(
             "{}",
-            "  Once ractor exposes supervision tree APIs, this command will show:".bright_black()
+            "Tip: Use 'supervtree' to see actor supervision hierarchy".bright_black()
         );
-        println!(
-            "{}",
-            "  - True parent/child actor relationships".bright_black()
-        );
-        println!("{}", "  - Supervisor strategies".bright_black());
-        println!("{}", "  - Actor restart counts".bright_black());
         println!();
 
         Ok(())

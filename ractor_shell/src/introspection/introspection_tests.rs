@@ -813,3 +813,78 @@ async fn IntrospectionActor___stop_actor___returns_false_for_nonexistent() {
 
     introspection_ref.stop(None);
 }
+
+// ============================================================================
+// GetProcessGroupTree Tests
+// ============================================================================
+
+#[tokio::test]
+async fn IntrospectionActor___get_process_group_tree___returns_groups_with_members() {
+    use ractor::pg;
+
+    // Create test actors and add them to process groups
+    let (test_actor1, _handle1) =
+        Actor::spawn(Some("pg_tree_actor1".to_string()), DynamicTestActor, ())
+            .await
+            .expect("Failed to spawn test actor 1");
+
+    let (test_actor2, _handle2) =
+        Actor::spawn(Some("pg_tree_actor2".to_string()), DynamicTestActor, ())
+            .await
+            .expect("Failed to spawn test actor 2");
+
+    let group_name = "test_pg_tree_group";
+    pg::join(
+        group_name.to_string(),
+        vec![test_actor1.get_cell(), test_actor2.get_cell()],
+    );
+
+    let args = IntrospectionArgs {
+        node_name: "pg_tree_test_node".to_string(),
+        tracing_handle: None,
+    };
+
+    let (introspection_ref, _handle) = Actor::spawn(
+        Some("pg_tree_test_introspection".to_string()),
+        IntrospectionActor,
+        args,
+    )
+    .await
+    .expect("Failed to spawn IntrospectionActor");
+
+    let result = introspection_ref
+        .call(
+            ShellProtocolMessage::GetProcessGroupTree,
+            Some(DEFAULT_RPC_TIMEOUT),
+        )
+        .await;
+
+    match result {
+        Ok(ractor::rpc::CallResult::Success(tree)) => {
+            // Verify our test group exists
+            assert!(
+                tree.contains_key(group_name),
+                "Tree should contain test_pg_tree_group"
+            );
+
+            // Verify it has the right members
+            let members = tree.get(group_name).unwrap();
+            assert_eq!(members.len(), 2, "Group should have 2 members");
+
+            let member_names: Vec<_> = members.iter().filter_map(|m| m.name.clone()).collect();
+            assert!(
+                member_names.contains(&"pg_tree_actor1".to_string()),
+                "Should find pg_tree_actor1"
+            );
+            assert!(
+                member_names.contains(&"pg_tree_actor2".to_string()),
+                "Should find pg_tree_actor2"
+            );
+        }
+        other => panic!("Expected process group tree, got {:?}", other),
+    }
+
+    test_actor1.stop(None);
+    test_actor2.stop(None);
+    introspection_ref.stop(None);
+}
