@@ -47,17 +47,18 @@ const MAX_TRACE_BUFFER_SIZE: usize = 1000;
 static NEXT_SUBSCRIPTION_ID: AtomicU64 = AtomicU64::new(1);
 
 /// A trace subscription with bounded buffer
-struct TraceSubscription {
+#[cfg_attr(test, derive(Debug))]
+pub(crate) struct TraceSubscription {
     /// Pattern for filtering trace events (e.g., "raft_*" or "*")
-    pattern: String,
+    pub(crate) pattern: String,
     /// Buffered trace events (bounded queue)
-    buffer: VecDeque<TraceEvent>,
+    pub(crate) buffer: VecDeque<TraceEvent>,
     /// Number of events dropped due to buffer overflow since last poll
-    dropped_count: usize,
+    pub(crate) dropped_count: usize,
 }
 
 impl TraceSubscription {
-    fn new(pattern: String) -> Self {
+    pub(crate) fn new(pattern: String) -> Self {
         Self {
             pattern,
             buffer: VecDeque::with_capacity(MAX_TRACE_BUFFER_SIZE),
@@ -66,7 +67,7 @@ impl TraceSubscription {
     }
 
     /// Add an event to the buffer, dropping oldest if full
-    fn push_event(&mut self, event: TraceEvent) {
+    pub(crate) fn push_event(&mut self, event: TraceEvent) {
         if self.buffer.len() >= MAX_TRACE_BUFFER_SIZE {
             // Drop oldest event
             self.buffer.pop_front();
@@ -76,7 +77,7 @@ impl TraceSubscription {
     }
 
     /// Take all buffered events and reset dropped count
-    fn take_events(&mut self) -> (Vec<TraceEvent>, usize) {
+    pub(crate) fn take_events(&mut self) -> (Vec<TraceEvent>, usize) {
         let events: Vec<_> = self.buffer.drain(..).collect();
         let dropped = self.dropped_count;
         self.dropped_count = 0;
@@ -364,7 +365,7 @@ impl Actor for IntrospectionActor {
 }
 
 /// Send a dynamic message to an actor (cast - fire and forget)
-async fn send_dynamic_message_to_actor(
+pub(crate) async fn send_dynamic_message_to_actor(
     actor_name: &str,
     json_value: serde_json::Value,
 ) -> DynamicSendResult {
@@ -389,7 +390,7 @@ async fn send_dynamic_message_to_actor(
 }
 
 /// Call an actor with a dynamic message (RPC - wait for response)
-async fn call_dynamic_message_to_actor(
+pub(crate) async fn call_dynamic_message_to_actor(
     actor_name: &str,
     json_value: serde_json::Value,
 ) -> DynamicCallResult {
@@ -436,7 +437,7 @@ async fn call_dynamic_message_to_actor(
 /// this function currently only supports schema introspection (listing variants)
 /// but not actual RPC calls. Use the `call` shell command with JSON messages
 /// for actors that implement `DynamicMessage`.
-async fn call_typed_rpc_on_actor(
+pub(crate) async fn call_typed_rpc_on_actor(
     actor_name: &str,
     variant_name: &str,
     args: serde_json::Value,
@@ -468,7 +469,7 @@ async fn call_typed_rpc_on_actor(
 }
 
 /// Check if a trace event matches a subscription pattern
-fn matches_pattern(pattern: &str, event: &TraceEvent) -> bool {
+pub(crate) fn matches_pattern(pattern: &str, event: &TraceEvent) -> bool {
     // Special case: "*" matches everything
     if pattern == "*" {
         return true;
@@ -497,7 +498,7 @@ fn matches_pattern(pattern: &str, event: &TraceEvent) -> bool {
 }
 
 /// Simple wildcard matching (supports * and ? wildcards)
-fn wildcard_match(pattern: &str, text: &str) -> bool {
+pub(crate) fn wildcard_match(pattern: &str, text: &str) -> bool {
     // Use the TraceFilter's matching logic
     let mut filter = TraceFilter::new();
     filter.add_pattern(pattern);
@@ -505,7 +506,7 @@ fn wildcard_match(pattern: &str, text: &str) -> bool {
 }
 
 /// Build cluster topology by examining process groups and actor IDs
-fn build_cluster_topology(local_node_name: &str) -> ClusterTopology {
+pub(crate) fn build_cluster_topology(local_node_name: &str) -> ClusterTopology {
     let mut node_ids: HashSet<String> = HashSet::new();
     let mut node_names: HashMap<String, String> = HashMap::new();
     let mut process_groups: HashMap<String, Vec<ActorLocation>> = HashMap::new();
@@ -592,12 +593,12 @@ fn build_cluster_topology(local_node_name: &str) -> ClusterTopology {
 }
 
 /// Extract node ID from an actor ID string (e.g., "1.0" -> "1")
-fn extract_node_id(actor_id: &str) -> String {
+pub(crate) fn extract_node_id(actor_id: &str) -> String {
     actor_id.split('.').next().unwrap_or("0").to_string()
 }
 
 /// Build supervision trees for all root actors (actors without supervisors)
-fn build_supervision_tree_roots() -> Vec<crate::protocol::SupervisionTreeNode> {
+pub(crate) fn build_supervision_tree_roots() -> Vec<crate::protocol::SupervisionTreeNode> {
     use std::collections::HashSet;
 
     let mut all_actors = Vec::new();
@@ -641,3 +642,6 @@ fn build_supervision_tree_roots() -> Vec<crate::protocol::SupervisionTreeNode> {
         .map(|cell| crate::protocol::SupervisionTreeNode::from_cell(cell))
         .collect()
 }
+
+#[cfg(test)]
+mod introspection_tests;

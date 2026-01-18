@@ -171,11 +171,12 @@
 **Value**: MEDIUM - Important for reliability
 **Core Changes**: None
 
-- [ ] **Add tests for `introspection.rs`** (HIGH PRIORITY)
-  - 570 lines with no tests
-  - Complex functions: `send_dynamic_message_to_actor()`, `call_dynamic_message_to_actor()`, `build_cluster_topology()`
-  - Multiple error paths untested
-  - ~2 hours
+- [x] **Add tests for `introspection.rs`** ✅ COMPLETE
+  - Added 34 tests covering all key functions
+  - TraceSubscription, pattern matching, extract_node_id
+  - send/call_dynamic_message_to_actor, call_typed_rpc_on_actor
+  - build_cluster_topology, build_supervision_tree_roots
+  - IntrospectionActor integration tests (spawn, ping, list, get info)
 
 - [ ] **Add tests for `tui/app.rs`**
   - 332 lines with no tests
