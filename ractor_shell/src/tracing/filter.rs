@@ -117,6 +117,22 @@ impl TraceFilter {
 
         false
     }
+
+    /// Check if a target (module path) matches any pattern.
+    /// This allows filtering by module like "ractor_shell::raft*".
+    pub fn matches_target(&self, target: &str) -> bool {
+        if self.trace_all {
+            return true;
+        }
+
+        for pattern in &self.patterns {
+            if glob_match::glob_match(pattern, target) {
+                return true;
+            }
+        }
+
+        false
+    }
 }
 
 #[cfg(test)]

@@ -98,6 +98,23 @@ pub enum ShellProtocolMessage {
         serde_json::Value,
         RpcReplyPort<TypedRpcResult>,
     ),
+
+    // ==================== Remote Tracing ====================
+    /// Subscribe to trace events from this node (pattern, returns subscription ID)
+    #[rpc]
+    SubscribeToTraces(String, RpcReplyPort<SubscriptionId>),
+
+    /// Poll for trace events from a subscription (subscription_id)
+    #[rpc]
+    PollTraces(SubscriptionId, RpcReplyPort<TraceEventBatch>),
+
+    /// Unsubscribe from trace events
+    #[rpc]
+    UnsubscribeFromTraces(SubscriptionId, RpcReplyPort<bool>),
+
+    /// Internal: Receive a trace event from the local tracing layer (cast message)
+    /// This is not used by remote clients, only by the local tracing infrastructure
+    TraceEventNotification(SerializableTraceEvent),
 }
 
 /// Result of a typed RPC call
@@ -113,6 +130,39 @@ pub enum TypedRpcResult {
     UnknownVariant(String),
     /// Call failed (e.g., timeout, channel error)
     CallFailed(String),
+}
+
+/// Unique identifier for a trace subscription
+pub type SubscriptionId = u64;
+
+/// Batch of trace events with dropped count
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TraceEventBatch {
+    /// Trace events since last poll
+    pub events: Vec<SerializableTraceEvent>,
+    /// Number of events dropped due to buffer overflow since last poll
+    pub dropped_count: usize,
+}
+
+/// Serializable trace event for network transmission
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SerializableTraceEvent {
+    /// Timestamp as RFC3339 string
+    pub timestamp: String,
+    /// Actor ID (e.g., "0.1")
+    pub actor_id: Option<String>,
+    /// Actor name (if registered)
+    pub actor_name: Option<String>,
+    /// Event type (span enter, exit, or event)
+    pub event_type: String,
+    /// Event level (trace, debug, info, warn, error)
+    pub level: String,
+    /// Span/event target
+    pub target: String,
+    /// Event message or span name
+    pub message: String,
+    /// Additional fields
+    pub fields: Vec<(String, String)>,
 }
 
 /// Information about an actor (serializable across network)
@@ -136,6 +186,22 @@ impl ActorInfo {
             name: cell.get_name(),
             status: format!("{:?}", cell.get_status()),
             is_local: cell.get_id().is_local(),
+        }
+    }
+}
+
+impl SerializableTraceEvent {
+    /// Convert from internal TraceEvent to serializable format
+    pub fn from_trace_event(event: &crate::tracing::TraceEvent) -> Self {
+        Self {
+            timestamp: event.timestamp.to_rfc3339(),
+            actor_id: event.actor_id.clone(),
+            actor_name: event.actor_name.clone(),
+            event_type: format!("{}", event.event_type),
+            level: format!("{}", event.level),
+            target: event.target.clone(),
+            message: event.message.clone(),
+            fields: event.fields.clone(),
         }
     }
 }

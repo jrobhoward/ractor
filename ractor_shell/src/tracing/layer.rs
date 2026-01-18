@@ -4,6 +4,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
 
 use chrono::Local;
+use tokio::sync::mpsc;
 use tracing::span::{Attributes, Id};
 use tracing::{Event, Subscriber};
 use tracing_subscriber::layer::Context;
@@ -26,6 +27,8 @@ struct TracingHandleInner {
     outputs: RwLock<Vec<(TraceOutput, TraceOutputFormat)>>,
     /// Whether tracing is enabled
     enabled: AtomicBool,
+    /// Optional channel to send trace events (for remote tracing subscriptions)
+    event_sender: RwLock<Option<mpsc::UnboundedSender<TraceEvent>>>,
 }
 
 impl TracingHandle {
@@ -36,6 +39,7 @@ impl TracingHandle {
                 filter: RwLock::new(TraceFilter::new()),
                 outputs: RwLock::new(vec![(TraceOutput::console(), TraceOutputFormat::Pretty)]),
                 enabled: AtomicBool::new(false),
+                event_sender: RwLock::new(None),
             }),
         }
     }
@@ -105,6 +109,19 @@ impl TracingHandle {
             .collect()
     }
 
+    /// Set an event sender for remote tracing subscriptions.
+    /// Events will be sent through this channel in addition to normal outputs.
+    pub fn set_event_sender(&self, sender: mpsc::UnboundedSender<TraceEvent>) {
+        let mut event_sender = self.inner.event_sender.write().unwrap();
+        *event_sender = Some(sender);
+    }
+
+    /// Remove the event sender.
+    pub fn clear_event_sender(&self) {
+        let mut event_sender = self.inner.event_sender.write().unwrap();
+        *event_sender = None;
+    }
+
     /// Check if an actor matches the current filter.
     fn matches(&self, actor_name: Option<&str>, actor_id: Option<&str>) -> bool {
         if !self.inner.enabled.load(Ordering::SeqCst) {
@@ -114,11 +131,28 @@ impl TracingHandle {
         filter.matches(actor_name) || actor_id.map(|id| filter.matches_id(id)).unwrap_or(false)
     }
 
+    /// Check if a target (module path) matches the current filter.
+    fn matches_target(&self, target: &str) -> bool {
+        if !self.inner.enabled.load(Ordering::SeqCst) {
+            return false;
+        }
+        let filter = self.inner.filter.read().unwrap();
+        filter.matches_target(target)
+    }
+
     /// Write an event to all outputs.
     fn write_event(&self, event: TraceEvent) {
+        // Write to configured outputs (console, files)
         let outputs = self.inner.outputs.read().unwrap();
         for (output, format) in outputs.iter() {
             let _ = output.write(&event, *format);
+        }
+        drop(outputs); // Release lock before sending to channel
+
+        // Send to event channel for remote tracing if configured
+        let event_sender = self.inner.event_sender.read().unwrap();
+        if let Some(sender) = event_sender.as_ref() {
+            let _ = sender.send(event.clone());
         }
     }
 }
@@ -307,6 +341,14 @@ where
             return;
         }
 
+        // Skip events from the tracing infrastructure itself to prevent infinite recursion
+        let target = event.metadata().target();
+        if target.starts_with("ractor_shell::tracing")
+            || target.starts_with("ractor_shell::introspection")
+        {
+            return;
+        }
+
         // Look for parent actor span to get actor context
         let mut actor_id = None;
         let mut actor_name = None;
@@ -336,11 +378,14 @@ where
             actor_name = visitor.actor_name;
         }
 
-        // Only emit if this actor matches our filter or if we found a match
-        if !self
+        // Only emit if actor name, actor id, or target matches our filter
+        let target = event.metadata().target();
+        let matches = self
             .handle
             .matches(actor_name.as_deref(), actor_id.as_deref())
-        {
+            || self.handle.matches_target(target);
+
+        if !matches {
             return;
         }
 
@@ -350,8 +395,8 @@ where
 
         let trace_event = TraceEvent {
             timestamp: Local::now(),
-            actor_id,
-            actor_name,
+            actor_id: actor_id.clone(),
+            actor_name: actor_name.clone(),
             event_type: TraceEventType::Event,
             level: *event.metadata().level(),
             target: event.metadata().target().to_string(),

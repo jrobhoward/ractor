@@ -18,6 +18,11 @@
 #   call raft_node GetStatus {}  - Get full status
 #   call raft_node GetPeers {}   - List connected peers
 #
+# Remote Tracing:
+#   trace remote 127.0.0.1:9001 *raft*  - Subscribe to raft events
+#   trace remote 127.0.0.1:9001 node_*  - Subscribe by actor name
+#   trace remote off                    - Stop remote tracing
+#
 
 set -e
 
@@ -71,6 +76,11 @@ print_usage() {
     echo "  GetLeader {}  - Get current leader name"
     echo "  GetStatus {}  - Get full node status"
     echo "  GetPeers {}   - List connected peers"
+    echo
+    echo "Remote Tracing:"
+    echo "  trace remote 127.0.0.1:9001 *raft*  - Subscribe to raft events"
+    echo "  trace remote 127.0.0.1:9001 node_*  - Subscribe by actor name"
+    echo "  trace remote off                    - Stop remote tracing"
     echo
 }
 
@@ -301,6 +311,12 @@ if [ "$START_SHELL" = true ]; then
     for addr in "${NODE_ADDRS[@]}"; do
         echo -e "    ${GREEN}connect $addr${NC}"
     done
+    echo
+    echo "  Remote tracing (subscribe to events from a node):"
+    echo
+    echo -e "    ${GREEN}trace remote 127.0.0.1:$START_PORT *raft*${NC}    # Trace raft module events"
+    echo -e "    ${GREEN}trace remote 127.0.0.1:$START_PORT node_*${NC}    # Trace by actor name"
+    echo -e "    ${GREEN}trace remote off${NC}                        # Stop remote tracing"
     echo
     echo -e "${CYAN}────────────────────────────────────────────────────────────${NC}"
     echo

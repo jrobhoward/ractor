@@ -46,15 +46,21 @@
 //! Nodes use transitive connection mode, so connecting to one node
 //! automatically discovers and connects to its peers.
 
+use std::time::Duration;
+
 use clap::Parser;
 use colored::Colorize;
+use tokio::signal;
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
+use tracing_subscriber::Layer;
+
 use ractor::Actor;
 use ractor_cluster::node::{client, NodeConnectionMode};
 use ractor_cluster::NodeServer;
-use ractor_shell::introspection::IntrospectionActor;
+
+use ractor_shell::introspection::{IntrospectionActor, IntrospectionArgs};
 use ractor_shell::raft::{RaftConfig, RaftNode};
-use std::time::Duration;
-use tokio::signal;
 
 /// Command line arguments for the cluster node
 #[derive(Parser, Debug)]
@@ -96,15 +102,20 @@ struct Args {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    // Initialize tracing for Raft debug output
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::from_default_env()
-                .add_directive("ractor_shell::raft=info".parse().unwrap()),
-        )
-        .init();
-
     let args = Args::parse();
+
+    // Initialize tracing with ShellTracingLayer for remote tracing support
+    let (tracing_layer, tracing_handle) = ractor_shell::tracing::ShellTracingLayer::new();
+
+    // Apply filter only to fmt layer so ShellTracingLayer sees ALL events
+    // ShellTracingLayer does its own pattern-based filtering
+    let fmt_filter = tracing_subscriber::EnvFilter::from_default_env()
+        .add_directive("ractor_shell=info".parse()?); // fmt only shows INFO+
+
+    tracing_subscriber::registry()
+        .with(tracing_subscriber::fmt::layer().with_filter(fmt_filter))
+        .with(tracing_layer) // No filter - sees everything
+        .init();
 
     println!("{}", "═".repeat(60).bright_black());
     println!(
@@ -153,11 +164,17 @@ async fn main() -> anyhow::Result<()> {
     let (_introspection_ref, _) = Actor::spawn(
         Some("introspection".to_string()),
         IntrospectionActor,
-        args.name.clone(),
+        IntrospectionArgs {
+            node_name: args.name.clone(),
+            tracing_handle: Some(tracing_handle),
+        },
     )
     .await?;
 
-    println!("{} IntrospectionActor ready", "✓".green());
+    println!(
+        "{} IntrospectionActor ready (remote tracing enabled)",
+        "✓".green()
+    );
 
     // Start the Raft node for leader election
     println!("Starting RaftNode...");

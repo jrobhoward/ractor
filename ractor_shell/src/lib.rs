@@ -51,12 +51,15 @@
 //! - [`completer`]: Tab completion support
 
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Duration;
 
 use colored::Colorize;
 use ractor::rpc::CallResult;
 use ractor::{pg, registry, Actor, ActorRef};
 use tabled::Tabled;
+use tokio::sync::Mutex;
+use tokio::task::JoinHandle;
 
 pub mod commands;
 pub mod completer;
@@ -96,7 +99,20 @@ pub const KNOWN_PROCESS_GROUPS: &[&str] = &[
 ];
 
 use introspection::INTROSPECTION_GROUP;
-use protocol::{ClusterTopology, ShellProtocolMessage};
+use protocol::{ClusterTopology, ShellProtocolMessage, SubscriptionId};
+
+/// Active remote trace subscription
+pub(crate) struct RemoteTraceSubscription {
+    /// Node being traced
+    node: String,
+    /// Subscription ID from the remote node
+    subscription_id: SubscriptionId,
+    /// Pattern being traced
+    #[allow(dead_code)]
+    pattern: String,
+    /// Background polling task
+    _poll_task: JoinHandle<()>,
+}
 
 /// Main shell state
 pub struct ShellState {
@@ -116,6 +132,8 @@ pub struct ShellState {
     pub monitor_actor: Option<ActorRef<monitor::MonitorMessage>>,
     /// Handle for controlling actor tracing
     pub tracing_handle: Option<tracing::TracingHandle>,
+    /// Active remote trace subscriptions
+    pub(crate) remote_trace_subscriptions: Arc<Mutex<Vec<RemoteTraceSubscription>>>,
     /// Quiet mode - suppresses verbose output (for scripting)
     pub quiet: bool,
 }
@@ -163,6 +181,7 @@ impl ShellState {
             cluster_topology: None,
             monitor_actor: Some(monitor_ref),
             tracing_handle: None, // Initialized on first trace command
+            remote_trace_subscriptions: Arc::new(Mutex::new(Vec::new())),
             quiet,
         })
     }
@@ -218,6 +237,10 @@ impl ShellState {
             ShellCommand::TraceToFile { path, pattern } => {
                 self.cmd_trace_to_file(path, pattern).await
             }
+            ShellCommand::TraceRemote { node, pattern } => {
+                self.cmd_trace_remote(node, pattern).await
+            }
+            ShellCommand::TraceRemoteOff => self.cmd_trace_remote_off().await,
             ShellCommand::Schema { actor } => self.cmd_schema(actor).await,
         }
     }
@@ -384,6 +407,181 @@ impl ShellState {
         Ok(())
     }
 
+    /// Start remote tracing on a connected node.
+    async fn cmd_trace_remote(&mut self, node: String, pattern: String) -> ShellResult<()> {
+        // Check if we're connected to this node
+        let introspection_ref = self
+            .connected_nodes
+            .get(&node)
+            .ok_or_else(|| ShellError::NodeNotConnected(node.clone()))?
+            .clone();
+
+        // Subscribe to traces on the remote node
+        let result = introspection_ref
+            .call(
+                |reply| ShellProtocolMessage::SubscribeToTraces(pattern.clone(), reply),
+                Some(DEFAULT_RPC_TIMEOUT),
+            )
+            .await
+            .map_err(ShellError::messaging)?;
+
+        let subscription_id = match result {
+            CallResult::Success(id) => id,
+            CallResult::SenderError => {
+                return Err(ShellError::RemoteOperationFailed(format!(
+                    "Remote introspection actor not available on {}",
+                    node
+                )));
+            }
+            CallResult::Timeout => {
+                return Err(ShellError::RpcTimeout(DEFAULT_RPC_TIMEOUT));
+            }
+        };
+
+        println!(
+            "{} Subscribed to remote traces on {} (pattern: {}, subscription: {})",
+            "✓".green(),
+            node.yellow(),
+            pattern.cyan(),
+            subscription_id
+        );
+
+        // Spawn polling task
+        let poll_node = node.clone();
+        let poll_ref = introspection_ref.clone();
+        let subscriptions = self.remote_trace_subscriptions.clone();
+
+        let poll_task = tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_millis(100));
+            loop {
+                interval.tick().await;
+
+                // Poll for events
+                match poll_ref
+                    .call(
+                        |reply| ShellProtocolMessage::PollTraces(subscription_id, reply),
+                        Some(DEFAULT_RPC_TIMEOUT),
+                    )
+                    .await
+                {
+                    Ok(CallResult::Success(batch)) => {
+                        // Display events
+                        for event in &batch.events {
+                            let level_str = &event.level;
+                            let level_colored = match level_str.as_str() {
+                                "ERROR" => level_str.red(),
+                                "WARN" => level_str.yellow(),
+                                "INFO" => level_str.green(),
+                                "DEBUG" => level_str.blue(),
+                                "TRACE" => level_str.purple(),
+                                _ => level_str.white(),
+                            };
+
+                            let actor_info = if let Some(name) = &event.actor_name {
+                                format!("{}({})", name, event.actor_id.as_deref().unwrap_or("?"))
+                            } else {
+                                event.actor_id.as_deref().unwrap_or("?").to_string()
+                            };
+
+                            println!(
+                                "[{}] {} {} {} {}",
+                                poll_node.yellow(),
+                                event.timestamp.bright_black(),
+                                level_colored,
+                                actor_info.cyan(),
+                                event.message
+                            );
+
+                            // Show fields if present
+                            if !event.fields.is_empty() {
+                                for (key, value) in &event.fields {
+                                    println!("      {}: {}", key.bright_black(), value);
+                                }
+                            }
+                        }
+
+                        // Warn if events were dropped
+                        if batch.dropped_count > 0 {
+                            println!(
+                                "{} [{}] {} trace events dropped due to buffer overflow",
+                                "⚠".yellow(),
+                                poll_node.yellow(),
+                                batch.dropped_count
+                            );
+                        }
+                    }
+                    Ok(CallResult::Timeout) | Ok(CallResult::SenderError) => {
+                        // Connection lost, stop polling
+                        eprintln!(
+                            "{} Lost connection to {}, stopping remote trace",
+                            "✗".red(),
+                            poll_node.yellow()
+                        );
+
+                        // Remove subscription from list
+                        let mut subs = subscriptions.lock().await;
+                        subs.retain(|s| s.subscription_id != subscription_id);
+                        break;
+                    }
+                    Err(_) => {
+                        // Error polling, continue (transient errors are OK)
+                    }
+                }
+            }
+        });
+
+        // Store subscription
+        let subscription = RemoteTraceSubscription {
+            node: node.clone(),
+            subscription_id,
+            pattern: pattern.clone(),
+            _poll_task: poll_task,
+        };
+
+        self.remote_trace_subscriptions
+            .lock()
+            .await
+            .push(subscription);
+
+        Ok(())
+    }
+
+    /// Stop all remote tracing.
+    async fn cmd_trace_remote_off(&mut self) -> ShellResult<()> {
+        let mut subscriptions = self.remote_trace_subscriptions.lock().await;
+
+        if subscriptions.is_empty() {
+            println!("{}", "No active remote trace subscriptions".yellow());
+            return Ok(());
+        }
+
+        let count = subscriptions.len();
+
+        // Unsubscribe from each remote node
+        for sub in subscriptions.drain(..) {
+            if let Some(introspection_ref) = self.connected_nodes.get(&sub.node) {
+                let _ = introspection_ref
+                    .call(
+                        |reply| {
+                            ShellProtocolMessage::UnsubscribeFromTraces(sub.subscription_id, reply)
+                        },
+                        Some(DEFAULT_RPC_TIMEOUT),
+                    )
+                    .await;
+            }
+            // Poll task will be dropped and cancelled when subscription is dropped
+        }
+
+        println!(
+            "{} Stopped {} remote trace subscription{}",
+            "✓".green(),
+            count,
+            if count == 1 { "" } else { "s" }
+        );
+
+        Ok(())
+    }
+
     async fn cmd_help(&self, command: Option<String>) -> ShellResult<()> {
         if let Some(cmd) = command {
             // Show detailed help for specific command
@@ -529,6 +727,21 @@ impl ShellState {
                     println!("  File output is in addition to console output.");
                     println!("  Use 'trace off' to stop and close file outputs.");
                 }
+                "trace-remote" | "traceremote" => {
+                    println!("{}", "trace remote <node> <pattern>".green().bold());
+                    println!("  Subscribe to trace events from a remote node");
+                    println!("\n{}", "Usage:".bold());
+                    println!("  trace remote <node> <pattern>  Subscribe to remote traces");
+                    println!("  trace remote off               Stop all remote subscriptions");
+                    println!("\n{}", "Examples:".bold());
+                    println!("  trace remote 127.0.0.1:9001 raft_*");
+                    println!("  trace remote 127.0.0.1:9001 *");
+                    println!("  trace remote off");
+                    println!("\n{}", "Note:".bold());
+                    println!("  Remote traces are displayed with [node] prefix.");
+                    println!("  Events are polled periodically from the remote node.");
+                    println!("  If buffer overflows, dropped count is reported.");
+                }
                 _ => {
                     println!("{} Unknown command: {}", "Error:".red().bold(), cmd);
                 }
@@ -598,6 +811,10 @@ impl ShellState {
                 "trace [pattern]".green()
             );
             println!("  {}  Log traces to file", "trace-to-file <path>".green());
+            println!(
+                "  {} Subscribe to remote traces",
+                "trace remote <node> <pattern>".green()
+            );
             println!();
             println!("  {}              Exit the shell", "exit".green());
             println!();
@@ -2601,6 +2818,10 @@ pub enum ShellCommand {
         path: String,
         pattern: Option<String>,
     },
+    /// Subscribe to remote traces from a node. Alias: `tr`. Usage: `trace remote <node> <pattern>`
+    TraceRemote { node: String, pattern: String },
+    /// Stop remote tracing. Usage: `trace remote off`
+    TraceRemoteOff,
     /// Show message schema for an actor. Alias: `sc`. Usage: `schema <actor>` or `schema` to list all
     Schema { actor: Option<String> },
 }
@@ -2808,13 +3029,27 @@ impl ShellCommand {
             "monitors" => Ok(ShellCommand::Monitors),
             "top" => Ok(ShellCommand::Top),
             "trace" => {
-                // "trace off" is a special case
-                if parts.get(1).copied() == Some("off") {
-                    Ok(ShellCommand::TraceOff)
-                } else {
-                    Ok(ShellCommand::Trace {
+                match parts.get(1).copied() {
+                    Some("off") => Ok(ShellCommand::TraceOff),
+                    Some("remote") => {
+                        // "trace remote off" or "trace remote <node> <pattern>"
+                        if parts.get(2).copied() == Some("off") {
+                            Ok(ShellCommand::TraceRemoteOff)
+                        } else if parts.len() < 4 {
+                            return Err(ShellError::MissingArgument {
+                                command: "trace remote",
+                                requirement: "<node> <pattern> or 'off'",
+                            });
+                        } else {
+                            Ok(ShellCommand::TraceRemote {
+                                node: parts[2].to_string(),
+                                pattern: parts[3].to_string(),
+                            })
+                        }
+                    }
+                    _ => Ok(ShellCommand::Trace {
                         pattern: parts.get(1).map(|s| s.to_string()),
-                    })
+                    }),
                 }
             }
             "trace-to-file" | "tracefile" => {

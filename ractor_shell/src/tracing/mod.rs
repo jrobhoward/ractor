@@ -30,4 +30,4 @@ mod output;
 
 pub use filter::TraceFilter;
 pub use layer::{ShellTracingLayer, TracingHandle};
-pub use output::{TraceEvent, TraceOutput, TraceOutputFormat};
+pub use output::{TraceEvent, TraceEventType, TraceOutput, TraceOutputFormat};

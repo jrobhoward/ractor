@@ -21,19 +21,68 @@
 //! ).await?;
 //! ```
 
-use crate::dynamic::{supports_dynamic_messages, CallResponse, DynamicMessage};
-use crate::protocol::{
-    ActorInfo, ActorLocation, ClusterTopology, DynamicCallResult, DynamicSendResult, NodeInfo,
-    ShellProtocolMessage, TypedRpcResult,
-};
-use crate::DEFAULT_RPC_TIMEOUT;
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::sync::atomic::{AtomicU64, Ordering};
+
+use chrono::DateTime;
 
 use ractor::rpc::CallResult;
 use ractor::{pg, registry, Actor, ActorProcessingErr, ActorRef};
 
+use crate::dynamic::{supports_dynamic_messages, CallResponse, DynamicMessage};
+use crate::protocol::{
+    ActorInfo, ActorLocation, ClusterTopology, DynamicCallResult, DynamicSendResult, NodeInfo,
+    SerializableTraceEvent, ShellProtocolMessage, SubscriptionId, TraceEventBatch, TypedRpcResult,
+};
+use crate::tracing::{TraceEvent, TraceEventType, TraceFilter, TracingHandle};
+use crate::DEFAULT_RPC_TIMEOUT;
+
 /// Well-known process group for shell introspection actors
 pub const INTROSPECTION_GROUP: &str = "ractor_shell_introspection";
+
+/// Maximum number of trace events to buffer per subscription before discarding
+const MAX_TRACE_BUFFER_SIZE: usize = 1000;
+
+/// Global counter for generating unique subscription IDs
+static NEXT_SUBSCRIPTION_ID: AtomicU64 = AtomicU64::new(1);
+
+/// A trace subscription with bounded buffer
+struct TraceSubscription {
+    /// Pattern for filtering trace events (e.g., "raft_*" or "*")
+    pattern: String,
+    /// Buffered trace events (bounded queue)
+    buffer: VecDeque<TraceEvent>,
+    /// Number of events dropped due to buffer overflow since last poll
+    dropped_count: usize,
+}
+
+impl TraceSubscription {
+    fn new(pattern: String) -> Self {
+        Self {
+            pattern,
+            buffer: VecDeque::with_capacity(MAX_TRACE_BUFFER_SIZE),
+            dropped_count: 0,
+        }
+    }
+
+    /// Add an event to the buffer, dropping oldest if full
+    fn push_event(&mut self, event: TraceEvent) {
+        if self.buffer.len() >= MAX_TRACE_BUFFER_SIZE {
+            // Drop oldest event
+            self.buffer.pop_front();
+            self.dropped_count += 1;
+        }
+        self.buffer.push_back(event);
+    }
+
+    /// Take all buffered events and reset dropped count
+    fn take_events(&mut self) -> (Vec<TraceEvent>, usize) {
+        let events: Vec<_> = self.buffer.drain(..).collect();
+        let dropped = self.dropped_count;
+        self.dropped_count = 0;
+        (events, dropped)
+    }
+}
 
 /// Actor that provides introspection capabilities for remote shells.
 ///
@@ -45,22 +94,63 @@ pub struct IntrospectionActor;
 pub struct IntrospectionState {
     /// Name of this node in the cluster
     pub node_name: String,
+    /// Active trace subscriptions
+    subscriptions: HashMap<SubscriptionId, TraceSubscription>,
+    /// Tracing handle for controlling remote tracing
+    tracing_handle: Option<TracingHandle>,
+}
+
+/// Arguments for spawning an IntrospectionActor
+pub struct IntrospectionArgs {
+    /// Name of this node in the cluster
+    pub node_name: String,
+    /// Optional tracing handle to enable remote tracing subscriptions
+    pub tracing_handle: Option<TracingHandle>,
+}
+
+impl From<String> for IntrospectionArgs {
+    fn from(node_name: String) -> Self {
+        Self {
+            node_name,
+            tracing_handle: None,
+        }
+    }
 }
 
 impl Actor for IntrospectionActor {
     type Msg = ShellProtocolMessage;
     type State = IntrospectionState;
-    type Arguments = String; // node name
+    type Arguments = IntrospectionArgs;
 
     async fn pre_start(
         &self,
         myself: ActorRef<Self::Msg>,
-        node_name: String,
+        args: IntrospectionArgs,
     ) -> Result<Self::State, ActorProcessingErr> {
         // Join the well-known introspection group
         pg::join(INTROSPECTION_GROUP.to_string(), vec![myself.get_cell()]);
 
-        Ok(IntrospectionState { node_name })
+        // Set up trace event forwarding if tracing handle provided
+        if let Some(ref tracing_handle) = args.tracing_handle {
+            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+            tracing_handle.set_event_sender(tx);
+
+            // Spawn task to forward trace events to this actor
+            let actor_ref = myself.clone();
+            tokio::spawn(async move {
+                while let Some(event) = rx.recv().await {
+                    let serializable = SerializableTraceEvent::from_trace_event(&event);
+                    let _ =
+                        actor_ref.cast(ShellProtocolMessage::TraceEventNotification(serializable));
+                }
+            });
+        }
+
+        Ok(IntrospectionState {
+            node_name: args.node_name,
+            subscriptions: HashMap::new(),
+            tracing_handle: args.tracing_handle,
+        })
     }
 
     async fn handle(
@@ -140,6 +230,102 @@ impl Actor for IntrospectionActor {
             ShellProtocolMessage::CallTypedRpc(actor_name, variant_name, args, reply) => {
                 let result = call_typed_rpc_on_actor(&actor_name, &variant_name, args).await;
                 let _ = reply.send(result);
+            }
+
+            // ==================== Remote Tracing ====================
+            ShellProtocolMessage::SubscribeToTraces(pattern, reply) => {
+                let sub_id = NEXT_SUBSCRIPTION_ID.fetch_add(1, Ordering::SeqCst);
+
+                // Enable tracing for this pattern on the local tracing handle
+                if let Some(ref tracing_handle) = state.tracing_handle {
+                    tracing_handle.trace(&pattern);
+                }
+
+                state
+                    .subscriptions
+                    .insert(sub_id, TraceSubscription::new(pattern.clone()));
+
+                let _ = reply.send(sub_id);
+            }
+
+            ShellProtocolMessage::PollTraces(sub_id, reply) => {
+                if let Some(subscription) = state.subscriptions.get_mut(&sub_id) {
+                    let (events, dropped_count) = subscription.take_events();
+
+                    let serializable_events: Vec<SerializableTraceEvent> = events
+                        .iter()
+                        .map(|e| SerializableTraceEvent::from_trace_event(e))
+                        .collect();
+
+                    let batch = TraceEventBatch {
+                        events: serializable_events,
+                        dropped_count,
+                    };
+                    let _ = reply.send(batch);
+                } else {
+                    // Subscription not found - send empty batch
+                    let _ = reply.send(TraceEventBatch {
+                        events: vec![],
+                        dropped_count: 0,
+                    });
+                }
+            }
+
+            ShellProtocolMessage::UnsubscribeFromTraces(sub_id, reply) => {
+                if let Some(removed_sub) = state.subscriptions.remove(&sub_id) {
+                    // Check if any other subscriptions still use this pattern
+                    let pattern_still_used = state
+                        .subscriptions
+                        .values()
+                        .any(|s| s.pattern == removed_sub.pattern);
+
+                    // If no other subscriptions use this pattern, disable tracing for it
+                    if !pattern_still_used {
+                        if let Some(ref tracing_handle) = state.tracing_handle {
+                            tracing_handle.untrace(&removed_sub.pattern);
+                        }
+                    }
+
+                    let _ = reply.send(true);
+                } else {
+                    let _ = reply.send(false);
+                }
+            }
+
+            ShellProtocolMessage::TraceEventNotification(serializable_event) => {
+                // Convert serializable event back to TraceEvent for internal storage
+                // (We store the local format to avoid repeated conversions)
+                let event = TraceEvent {
+                    timestamp: DateTime::parse_from_rfc3339(&serializable_event.timestamp)
+                        .ok()
+                        .map(|dt| dt.with_timezone(&chrono::Local))
+                        .unwrap_or_else(chrono::Local::now),
+                    actor_id: serializable_event.actor_id.clone(),
+                    actor_name: serializable_event.actor_name.clone(),
+                    event_type: match serializable_event.event_type.as_str() {
+                        "ENTER" => TraceEventType::SpanEnter,
+                        "EXIT" => TraceEventType::SpanExit,
+                        _ => TraceEventType::Event,
+                    },
+                    level: match serializable_event.level.to_lowercase().as_str() {
+                        "trace" => tracing::Level::TRACE,
+                        "debug" => tracing::Level::DEBUG,
+                        "info" => tracing::Level::INFO,
+                        "warn" => tracing::Level::WARN,
+                        "error" => tracing::Level::ERROR,
+                        _ => tracing::Level::INFO,
+                    },
+                    target: serializable_event.target.clone(),
+                    message: serializable_event.message.clone(),
+                    fields: serializable_event.fields.clone(),
+                };
+
+                // Distribute event to matching subscriptions
+                for subscription in state.subscriptions.values_mut() {
+                    if matches_pattern(&subscription.pattern, &event) {
+                        subscription.push_event(event.clone());
+                    }
+                }
             }
         }
 
@@ -324,6 +510,43 @@ async fn call_typed_rpc_on_actor(
         // For now, return NotSchemaEnabled since we only have raft_node
         TypedRpcResult::NotSchemaEnabled
     }
+}
+
+/// Check if a trace event matches a subscription pattern
+fn matches_pattern(pattern: &str, event: &TraceEvent) -> bool {
+    // Special case: "*" matches everything
+    if pattern == "*" {
+        return true;
+    }
+
+    // Check actor name if present
+    if let Some(actor_name) = &event.actor_name {
+        if wildcard_match(pattern, actor_name) {
+            return true;
+        }
+    }
+
+    // Check actor ID if present
+    if let Some(actor_id) = &event.actor_id {
+        if wildcard_match(pattern, actor_id) {
+            return true;
+        }
+    }
+
+    // Check target (module path) - allows patterns like "*raft*" to match "ractor_shell::raft"
+    if wildcard_match(pattern, &event.target) {
+        return true;
+    }
+
+    false
+}
+
+/// Simple wildcard matching (supports * and ? wildcards)
+fn wildcard_match(pattern: &str, text: &str) -> bool {
+    // Use the TraceFilter's matching logic
+    let mut filter = TraceFilter::new();
+    filter.add_pattern(pattern);
+    filter.matches(Some(text))
 }
 
 /// Build cluster topology by examining process groups and actor IDs

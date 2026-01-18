@@ -792,6 +792,14 @@ impl RaftNode {
         term: u64,
         leader_name: String,
     ) -> Result<(), ActorProcessingErr> {
+        // Log all heartbeat receptions at TRACE level for debugging
+        tracing::trace!(
+            node = %state.config.node_name,
+            leader = %leader_name,
+            term = term,
+            "Received heartbeat"
+        );
+
         // If leader's term is at least as high as ours, accept them as leader
         if term >= state.current_term {
             let role_changed = state.role != RaftRole::Follower;
