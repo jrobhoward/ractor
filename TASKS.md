@@ -79,13 +79,6 @@ All documented aliases now implemented in `lib.rs` and `completer.rs`:
 - [x] `cargo fmt -p ractor_shell -- --check` passes
 - [x] `cargo doc -p ractor_shell --no-deps` builds (2 minor warnings about private items)
 
-### Integration Testing (Manual)
-- [ ] `./ractor_shell/scripts/test_cluster.sh` starts successfully
-- [ ] Connect to remote node and run basic commands
-- [ ] `top` command shows metrics
-- [ ] Tracing works locally and remotely
-- [ ] Raft commands work (`call raft_node GetStatus {}`)
-
 ---
 
 ## Potential Merge Blockers
@@ -187,15 +180,3 @@ cargo fmt -p ractor_shell -- --check
 cargo run -p ractor_shell
 ```
 
----
-
-## Checklist for PR
-
-- [x] Priority 1 tasks complete (documentation cleanup)
-- [x] Priority 2 tasks complete (alias consistency)
-- [x] Priority 3 tasks complete (example cleanup)
-- [x] Priority 4 tasks complete (build/test verification)
-- [ ] CHANGELOG.md updated (if exists)
-- [ ] PR description written with summary of changes
-- [x] Screenshots of `top` command added to docs
-- [ ] Core ractor changes reviewed separately if needed

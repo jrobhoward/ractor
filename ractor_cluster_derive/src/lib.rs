@@ -38,6 +38,50 @@ use syn::TypePath;
 use syn::Variant;
 use syn::{self};
 
+/// Parse the `#[fields(...)]` attribute from a variant, returning field names if present.
+///
+/// Returns `None` if the attribute is not present, or `Some(Vec<String>)` with the field names.
+/// The number of names should match the number of tuple fields (excluding RpcReplyPort for RPCs).
+fn parse_fields_attribute(variant: &Variant) -> syn::Result<Option<Vec<String>>> {
+    for attr in &variant.attrs {
+        if attr.path().is_ident("fields") {
+            let mut field_names = Vec::new();
+
+            attr.parse_nested_meta(|meta| {
+                if let Some(ident) = meta.path.get_ident() {
+                    field_names.push(ident.to_string());
+                    Ok(())
+                } else {
+                    Err(meta.error("expected identifier"))
+                }
+            })?;
+
+            if field_names.is_empty() {
+                return Err(syn::Error::new_spanned(
+                    attr,
+                    "#[fields(...)] requires at least one field name",
+                ));
+            }
+
+            return Ok(Some(field_names));
+        }
+    }
+    Ok(None)
+}
+
+/// Get the field key for a given index, using named fields if available.
+///
+/// For unnamed (tuple) fields, this returns either the ordinal index as a string ("0", "1", etc.)
+/// or the corresponding name from `#[fields(...)]` if provided.
+fn get_field_key(index: usize, field_names: &Option<Vec<String>>) -> String {
+    if let Some(names) = field_names {
+        if index < names.len() {
+            return names[index].clone();
+        }
+    }
+    index.to_string()
+}
+
 /// Derive `ractor::Message` for messages that are local-only
 #[proc_macro_derive(RactorMessage)]
 pub fn ractor_message_derive_macro(input: TokenStream) -> TokenStream {
@@ -89,7 +133,34 @@ pub fn ractor_message_derive_macro(input: TokenStream) -> TokenStream {
 ///     GetValue(RpcReplyPort<i32>),
 /// }
 /// ```
-#[proc_macro_derive(RactorClusterMessage, attributes(rpc, ractor_shell))]
+///
+/// ## Named Fields with `#[fields(...)]`
+///
+/// By default, tuple-style enum variants use ordinal positions ("0", "1", etc.) as field
+/// keys in JSON schema and serialization. You can provide human-readable field names using
+/// the `#[fields(...)]` attribute:
+///
+/// ```ignore
+/// #[derive(RactorClusterMessage)]
+/// #[ractor_shell]
+/// pub enum MyMessage {
+///     /// Without #[fields]: use {"0": "hello", "1": 42}
+///     Greeting(String, i32),
+///
+///     /// With #[fields]: use {"message": "hello", "count": 42}
+///     #[fields(message, count)]
+///     GreetingNamed(String, i32),
+///
+///     /// For RPCs, only name the non-reply fields
+///     #[rpc]
+///     #[fields(peer_name)]
+///     IsPeer(String, RpcReplyPort<bool>),
+/// }
+/// ```
+///
+/// The `#[fields(...)]` attribute is optional. When omitted, ordinal positions are used.
+/// Field names improve the shell/JSON interface without affecting the binary wire protocol.
+#[proc_macro_derive(RactorClusterMessage, attributes(rpc, ractor_shell, fields))]
 pub fn ractor_cluster_message_derive_macro(input: TokenStream) -> TokenStream {
     // Construct a representation of Rust code as a syntax tree
     // that we can manipulate
@@ -658,6 +729,7 @@ fn build_schema_json(enum_data: &syn::DataEnum) -> syn::Result<String> {
     for variant in &enum_data.variants {
         let variant_name = variant.ident.to_string();
         let is_rpc = variant.attrs.iter().any(|attr| attr.path().is_ident("rpc"));
+        let field_names = parse_fields_attribute(variant)?;
 
         let fields_json = match &variant.fields {
             Fields::Unit => "{}".to_string(),
@@ -670,9 +742,30 @@ fn build_schema_json(enum_data: &syn::DataEnum) -> syn::Result<String> {
                     unnamed.unnamed.len()
                 };
 
+                // Validate field_names count if provided
+                if let Some(ref names) = field_names {
+                    if names.len() != field_count {
+                        return Err(syn::Error::new(
+                            variant.ident.span(),
+                            format!(
+                                "#[fields(...)] has {} names but variant '{}' has {} fields{}",
+                                names.len(),
+                                variant_name,
+                                field_count,
+                                if is_rpc {
+                                    " (excluding RpcReplyPort)"
+                                } else {
+                                    ""
+                                }
+                            ),
+                        ));
+                    }
+                }
+
                 for (i, field) in unnamed.unnamed.iter().take(field_count).enumerate() {
                     let type_str = type_to_string(&field.ty);
-                    field_entries.push(format!("\"{}\":\"{}\"", i, type_str));
+                    let field_key = get_field_key(i, &field_names);
+                    field_entries.push(format!("\"{}\":\"{}\"", field_key, type_str));
                 }
                 format!("{{{}}}", field_entries.join(","))
             }
@@ -734,6 +827,7 @@ fn impl_variant_from_json(_enum_name: &Ident, variant: &Variant) -> syn::Result<
     let variant_name = &variant.ident;
     let variant_name_str = variant_name.to_string();
     let is_rpc = variant.attrs.iter().any(|attr| attr.path().is_ident("rpc"));
+    let custom_field_names = parse_fields_attribute(variant)?;
 
     // RPC variants cannot be deserialized from JSON directly (need RpcReplyPort)
     if is_rpc {
@@ -759,9 +853,9 @@ fn impl_variant_from_json(_enum_name: &Ident, variant: &Variant) -> syn::Result<
                 .enumerate()
                 .map(|(i, field)| {
                     let field_name = format_ident!("field{}", i);
-                    let field_idx = i.to_string();
+                    let field_key = get_field_key(i, &custom_field_names);
                     let field_type = &field.ty;
-                    generate_json_field_extraction(&field_name, &field_idx, field_type)
+                    generate_json_field_extraction(&field_name, &field_key, field_type)
                 })
                 .collect();
 
@@ -828,6 +922,7 @@ fn impl_variant_to_json(_enum_name: &Ident, variant: &Variant) -> syn::Result<im
     let variant_name = &variant.ident;
     let variant_name_str = variant_name.to_string();
     let is_rpc = variant.attrs.iter().any(|attr| attr.path().is_ident("rpc"));
+    let custom_field_names = parse_fields_attribute(variant)?;
 
     match &variant.fields {
         Fields::Unit => Ok(quote! {
@@ -868,7 +963,7 @@ fn impl_variant_to_json(_enum_name: &Ident, variant: &Variant) -> syn::Result<im
             let json_fields: Vec<_> = (0..field_count)
                 .map(|i| {
                     let field_name = format_ident!("field{}", i);
-                    let field_key = i.to_string();
+                    let field_key = get_field_key(i, &custom_field_names);
                     quote! { #field_key: #field_name }
                 })
                 .collect();
@@ -972,6 +1067,7 @@ fn impl_dispatcher_module(
 fn impl_dispatcher_arm(message_type: &Ident, variant: &Variant) -> syn::Result<impl ToTokens> {
     let variant_name = &variant.ident;
     let variant_name_str = variant_name.to_string();
+    let custom_field_names = parse_fields_attribute(variant)?;
 
     // Get the fields for this variant
     let fields = match &variant.fields {
@@ -1025,9 +1121,9 @@ fn impl_dispatcher_arm(message_type: &Ident, variant: &Variant) -> syn::Result<i
             .enumerate()
             .map(|(i, field)| {
                 let field_name = format_ident!("arg{}", i);
-                let field_idx = i.to_string();
+                let field_key = get_field_key(i, &custom_field_names);
                 let field_type = &field.ty;
-                generate_dispatcher_field_extraction(&field_name, &field_idx, field_type)
+                generate_dispatcher_field_extraction(&field_name, &field_key, field_type)
             })
             .collect();
 

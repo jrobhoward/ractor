@@ -129,24 +129,68 @@ ractor@127.0.0.1:9001 > call raft_node GetPeers {}
 
 ---
 
-## 5. RPC with Arguments (New Feature!)
+## 5. RPC with Arguments
 
 ### Check if a specific node is a known peer:
 ```
-ractor@127.0.0.1:9001 > call raft_node IsPeer {"0": "node_b"}
+ractor@127.0.0.1:9001 > call raft_node IsPeer {"peer_name": "node_b"}
 true
 
-ractor@127.0.0.1:9001 > call raft_node IsPeer {"0": "node_c"}
+ractor@127.0.0.1:9001 > call raft_node IsPeer {"peer_name": "node_c"}
 true
 
-ractor@127.0.0.1:9001 > call raft_node IsPeer {"0": "unknown_node"}
+ractor@127.0.0.1:9001 > call raft_node IsPeer {"peer_name": "unknown_node"}
 false
 ```
 
-### View the message schema to see available RPCs:
+### View the message schema to see available RPCs and their field names:
 ```
 ractor@127.0.0.1:9001 > schema raft_node
+Message schema for raft_node
+
+  ElectionTimeout (Cast):
+    generation: u64
+
+  RequestVote (Cast):
+    term: u64
+    candidate_name: String
+
+  IsPeer (RPC):
+    peer_name: String
+    → returns: bool
+
+  GetStatus (RPC):
+    (no fields)
+    → returns: RaftStatus
+  ...
 ```
+
+### Named Fields with `#[fields(...)]`
+
+Message variants can use the `#[fields(...)]` attribute to provide human-readable
+field names instead of ordinal positions. This makes the shell interface more
+intuitive without changing the binary wire protocol.
+
+**Without `#[fields]`** (ordinal positions):
+```rust
+IsPeer(String, RpcReplyPort<bool>)
+```
+```
+call raft_node IsPeer {"0": "node_b"}
+```
+
+**With `#[fields(peer_name)]`** (named field):
+```rust
+#[rpc]
+#[fields(peer_name)]
+IsPeer(String, RpcReplyPort<bool>)
+```
+```
+call raft_node IsPeer {"peer_name": "node_b"}
+```
+
+The `schema` command shows the field names in use, making it easy to discover
+the correct JSON format for each message variant.
 
 ---
 

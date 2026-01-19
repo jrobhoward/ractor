@@ -75,25 +75,33 @@ pub const PEER_DISCOVERY_INTERVAL_MS: u64 = 2000;
 /// over the cluster network, enabling full tracing support.
 ///
 /// Note: Uses tuple-style fields as required by RactorClusterMessage derive.
+/// The `#[fields(...)]` attribute provides human-readable field names for the
+/// shell's JSON interface without affecting the binary wire protocol.
 #[derive(RactorClusterMessage, Debug)]
 #[ractor_shell]
 pub enum RaftMessage {
     // ==================== Internal Timers ====================
     // These are sent locally via send_after, not over the network
     /// Election timeout fired (internal) - generation to detect stale timers
+    #[fields(generation)]
     ElectionTimeout(u64),
     /// Heartbeat timeout fired (internal) - generation
+    #[fields(generation)]
     HeartbeatTimeout(u64),
     /// Peer discovery timeout (internal) - generation
+    #[fields(generation)]
     DiscoverPeers(u64),
 
     // ==================== Peer Protocol Messages ====================
     // These are sent between Raft nodes over the cluster network
     /// Request vote: (term, candidate_name)
+    #[fields(term, candidate_name)]
     RequestVote(u64, String),
     /// Vote response: (term, vote_granted, voter_name)
+    #[fields(term, vote_granted, voter_name)]
     VoteResponse(u64, bool, String),
     /// Heartbeat from leader: (term, leader_name)
+    #[fields(term, leader_name)]
     Heartbeat(u64, String),
 
     // ==================== Shell RPC Commands ====================
@@ -115,8 +123,9 @@ pub enum RaftMessage {
     #[rpc]
     StepDown(RpcReplyPort<bool>),
     /// Check if a given node name is a known peer
-    /// Example: call raft_node IsPeer {"0": "node_b"}
+    /// Example: call raft_node IsPeer {"peer_name": "node_b"}
     #[rpc]
+    #[fields(peer_name)]
     IsPeer(String, RpcReplyPort<bool>),
 }
 
