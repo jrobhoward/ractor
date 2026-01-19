@@ -79,8 +79,12 @@ pub enum ShellCommand {
     TraceRemote { node: String, pattern: String },
     /// Stop remote tracing. Usage: `trace remote off`
     TraceRemoteOff,
-    /// Show message schema for an actor. Alias: `sc`. Usage: `schema <actor>` or `schema` to list all
-    Schema { actor: Option<String> },
+    /// Show message schema for an actor. Alias: `sc`. Usage: `schema [--all] <actor>` or `schema` to list all.
+    /// By default only shows RPC variants (callable from shell). Use `--all` to show all variants.
+    Schema {
+        actor: Option<String>,
+        show_all: bool,
+    },
     /// Ping a remote node to measure latency. Usage: `ping <node>`
     Ping { node: String },
 }
@@ -387,9 +391,19 @@ impl ShellCommand {
                     pattern: parts.get(2).map(|s| s.to_string()),
                 })
             }
-            "schema" => Ok(ShellCommand::Schema {
-                actor: parts.get(1).map(|s| s.to_string()),
-            }),
+            "schema" => {
+                // Parse optional --all flag and actor name
+                let mut show_all = false;
+                let mut actor = None;
+                for part in parts.iter().skip(1) {
+                    if *part == "--all" || *part == "-a" {
+                        show_all = true;
+                    } else {
+                        actor = Some(part.to_string());
+                    }
+                }
+                Ok(ShellCommand::Schema { actor, show_all })
+            }
             "ping" => {
                 if parts.len() < 2 {
                     return Err(ShellError::MissingArgument {

@@ -143,25 +143,54 @@ ractor@127.0.0.1:9001 > call raft_node IsPeer {"peer_name": "unknown_node"}
 false
 ```
 
-### View the message schema to see available RPCs and their field names:
+### View the message schema to see available RPCs:
 ```
 ractor@127.0.0.1:9001 > schema raft_node
 Message schema for raft_node
 
-  ElectionTimeout (Cast):
-    generation: u64
+  GetLeader (RPC):
+    (no fields)
+    → returns: Option<String>
 
-  RequestVote (Cast):
-    term: u64
-    candidate_name: String
+  GetPeers (RPC):
+    (no fields)
+    → returns: Vec<String>
+
+  GetStatus (RPC):
+    (no fields)
+    → returns: RaftStatus
+
+  IsLeader (RPC):
+    (no fields)
+    → returns: bool
 
   IsPeer (RPC):
     peer_name: String
     → returns: bool
 
-  GetStatus (RPC):
+  StepDown (RPC):
     (no fields)
-    → returns: RaftStatus
+    → returns: bool
+
+  (6 internal variants hidden, use --all to show)
+```
+
+By default, `schema` only shows RPC variants (methods you can call from the shell).
+Use `--all` to see internal message variants too:
+
+```
+ractor@127.0.0.1:9001 > schema --all raft_node
+Message schema for raft_node
+
+  DiscoverPeers (Cast):
+    generation: u64
+
+  ElectionTimeout (Cast):
+    generation: u64
+
+  GetLeader (RPC):
+    (no fields)
+    → returns: Option<String>
   ...
 ```
 
@@ -190,7 +219,7 @@ call raft_node IsPeer {"peer_name": "node_b"}
 ```
 
 The `schema` command shows the field names in use, making it easy to discover
-the correct JSON format for each message variant.
+the correct JSON format for each RPC variant.
 
 ---
 
@@ -476,7 +505,7 @@ pkill -f cluster_demo
 | `registry` / `r` | List registered actors |
 | `info <actor>` / `i` | Show actor details |
 | `call <actor> <Variant> <json>` / `c` | Call RPC on actor |
-| `schema <actor>` | Show message schema |
+| `schema [--all] <actor>` | Show message schema (RPC only by default) |
 | `supervtree` / `st` | Show supervision tree |
 | `parent <actor>` / `p` | Show actor's parent |
 | `pg list` | List process groups |

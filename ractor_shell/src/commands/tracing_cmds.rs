@@ -62,7 +62,10 @@ impl ShellState {
             }
         }
 
-        let handle = self.tracing_handle.as_ref().unwrap();
+        let handle = self
+            .tracing_handle
+            .as_ref()
+            .expect("tracing_handle initialized by guard above");
 
         match pattern {
             Some(pat) => {
@@ -172,7 +175,10 @@ impl ShellState {
             }
         }
 
-        let handle = self.tracing_handle.as_ref().unwrap();
+        let handle = self
+            .tracing_handle
+            .as_ref()
+            .expect("tracing_handle initialized by guard above");
 
         match level {
             Some(level_str) => {
@@ -249,7 +255,10 @@ impl ShellState {
             }
         }
 
-        let handle = self.tracing_handle.as_ref().unwrap();
+        let handle = self
+            .tracing_handle
+            .as_ref()
+            .expect("tracing_handle initialized by guard above");
 
         // Add file output
         let path_buf = std::path::PathBuf::from(&path);

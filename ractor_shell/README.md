@@ -208,7 +208,7 @@ The Raft implementation uses:
 | `trace-to-file <path> [pattern]` | `tf` | Log traces to file |
 | `trace remote <node> <pattern>` | | Start tracing on remote node |
 | `trace remote off` | | Stop remote tracing |
-| `schema <actor>` | `sc` | Show actor message schema |
+| `schema [--all] <actor>` | `sc` | Show actor message schema (RPC only by default) |
 | `exit` / `quit` | `q` | Exit shell |
 
 ## Features

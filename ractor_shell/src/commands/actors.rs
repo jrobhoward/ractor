@@ -403,7 +403,16 @@ impl ShellState {
     }
 
     /// Show message schema for an actor, or list all schema-enabled actors.
-    pub(crate) async fn cmd_schema(&self, actor: Option<String>) -> ShellResult<()> {
+    ///
+    /// # Arguments
+    ///
+    /// * `actor` - Optional actor name. If None, lists all schema-enabled actors.
+    /// * `show_all` - If false, only show RPC variants. If true, show all variants.
+    pub(crate) async fn cmd_schema(
+        &self,
+        actor: Option<String>,
+        show_all: bool,
+    ) -> ShellResult<()> {
         match actor {
             Some(actor_name) => {
                 // Show schema for a specific actor
@@ -425,7 +434,7 @@ impl ShellState {
 
                         match result {
                             CallResult::Success(Some(schema_json)) => {
-                                self.display_schema(&actor_name, &schema_json);
+                                self.display_schema(&actor_name, &schema_json, show_all);
                                 Ok(())
                             }
                             CallResult::Success(None) => {
@@ -450,7 +459,7 @@ impl ShellState {
                 } else {
                     // Local query
                     if let Some(schema_json) = schema_registry::get_schema(&actor_name) {
-                        self.display_schema(&actor_name, &schema_json);
+                        self.display_schema(&actor_name, &schema_json, show_all);
                     } else {
                         println!(
                             "{} Actor '{}' does not have a registered schema.",
@@ -538,7 +547,13 @@ impl ShellState {
     }
 
     /// Display a formatted schema for an actor.
-    pub(crate) fn display_schema(&self, actor_name: &str, schema_json: &str) {
+    ///
+    /// # Arguments
+    ///
+    /// * `actor_name` - The name of the actor
+    /// * `schema_json` - The JSON schema string
+    /// * `show_all` - If false, only show RPC variants. If true, show all variants.
+    pub(crate) fn display_schema(&self, actor_name: &str, schema_json: &str, show_all: bool) {
         println!(
             "{} {}",
             "Message schema for".bold(),
@@ -548,13 +563,17 @@ impl ShellState {
 
         // Parse and display the schema
         if let Ok(schema) = serde_json::from_str::<serde_json::Value>(schema_json) {
-            let formatted = schema_registry::format_schema(&schema);
+            let formatted = schema_registry::format_schema(&schema, show_all);
             print!("{}", formatted);
 
-            // Show usage example
+            // Show usage example - find the first RPC variant
             if let Some(variants) = schema.get("variants").and_then(|v| v.as_object()) {
-                // Find a simple example variant to show
-                if let Some((variant_name, _)) = variants.iter().next() {
+                // Find an RPC variant to show as example
+                let rpc_variant = variants
+                    .iter()
+                    .find(|(_, info)| info.get("rpc").and_then(|v| v.as_bool()).unwrap_or(false));
+
+                if let Some((variant_name, _)) = rpc_variant {
                     println!("{}", "Example usage:".bright_black());
                     println!(
                         "  {}",

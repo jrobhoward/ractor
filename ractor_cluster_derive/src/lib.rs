@@ -25,6 +25,9 @@
 //!    is an RPC and will need port handler
 
 extern crate proc_macro;
+
+use std::borrow::Cow;
+
 use proc_macro::TokenStream;
 use quote::format_ident;
 use quote::quote;
@@ -73,13 +76,15 @@ fn parse_fields_attribute(variant: &Variant) -> syn::Result<Option<Vec<String>>>
 ///
 /// For unnamed (tuple) fields, this returns either the ordinal index as a string ("0", "1", etc.)
 /// or the corresponding name from `#[fields(...)]` if provided.
-fn get_field_key(index: usize, field_names: &Option<Vec<String>>) -> String {
+///
+/// Returns a `Cow<str>` to avoid unnecessary allocations when borrowing from the field names vector.
+fn get_field_key<'a>(index: usize, field_names: &'a Option<Vec<String>>) -> Cow<'a, str> {
     if let Some(names) = field_names {
         if index < names.len() {
-            return names[index].clone();
+            return Cow::Borrowed(&names[index]);
         }
     }
-    index.to_string()
+    Cow::Owned(index.to_string())
 }
 
 /// Derive `ractor::Message` for messages that are local-only

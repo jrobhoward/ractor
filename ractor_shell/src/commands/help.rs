@@ -195,6 +195,30 @@ impl ShellState {
                     println!("  Auto-connects if not already connected to the node.");
                     println!("  Returns latency in milliseconds.");
                 }
+                "schema" => {
+                    println!("{}", "schema [--all] [actor]".green().bold());
+                    println!("  Show message schema for schema-enabled actors");
+                    println!("\n{}", "Usage:".bold());
+                    println!("  schema                  List all schema-enabled actors");
+                    println!("  schema <actor>          Show RPC methods for an actor");
+                    println!(
+                        "  schema --all <actor>    Show all message variants (including internal)"
+                    );
+                    println!("\n{}", "Alias:".bold());
+                    println!("  sc");
+                    println!("\n{}", "Options:".bold());
+                    println!("  --all, -a    Show all variants (default: only RPC variants)");
+                    println!("\n{}", "Examples:".bold());
+                    println!("  schema raft_node              Show callable RPC methods");
+                    println!("  schema --all raft_node        Show all message variants");
+                    println!("  schema -a raft_node           Same as --all");
+                    println!("\n{}", "Note:".bold());
+                    println!(
+                        "  By default, only shows RPC variants (callable via 'call' command)."
+                    );
+                    println!("  Internal cast variants (timers, protocol messages) are hidden.");
+                    println!("  Use --all to see the complete message schema.");
+                }
                 _ => {
                     println!("{} Unknown command: {}", "Error:".red().bold(), cmd);
                 }
@@ -249,6 +273,10 @@ impl ShellState {
             println!(
                 "  {}               Launch TUI actor dashboard",
                 "top".green()
+            );
+            println!(
+                "  {}    Show actor message schema",
+                "schema [actor]".green()
             );
             println!();
             println!("{}", "  Actor Monitoring:".bright_black());

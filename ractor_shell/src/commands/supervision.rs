@@ -38,7 +38,9 @@ impl ShellState {
                 } else {
                     "├──"
                 };
-                let members = tree.get(*group_name).unwrap();
+                let members = tree
+                    .get(*group_name)
+                    .expect("key came from tree.keys(), must exist");
 
                 println!(
                     "{} {} {}",

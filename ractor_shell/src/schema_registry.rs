@@ -218,24 +218,36 @@ pub fn has_dispatcher(actor_name: &str) -> bool {
 /// # Arguments
 ///
 /// * `schema` - The parsed schema JSON
+/// * `show_all` - If false, only show RPC variants (callable from shell). If true, show all variants.
 ///
 /// # Returns
 ///
 /// A formatted string representation of the schema
-pub fn format_schema(schema: &serde_json::Value) -> String {
+pub fn format_schema(schema: &serde_json::Value, show_all: bool) -> String {
     let mut output = String::new();
 
     if let Some(variants) = schema.get("variants").and_then(|v| v.as_object()) {
+        let mut shown_count = 0;
+        let mut hidden_count = 0;
+
         for (variant_name, variant_info) in variants {
             let is_rpc = variant_info
                 .get("rpc")
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
 
+            // Skip non-RPC variants unless show_all is true
+            if !is_rpc && !show_all {
+                hidden_count += 1;
+                continue;
+            }
+
+            shown_count += 1;
+
             if is_rpc {
                 output.push_str(&format!("  {} (RPC):\n", variant_name));
             } else {
-                output.push_str(&format!("  {}:\n", variant_name));
+                output.push_str(&format!("  {} (Cast):\n", variant_name));
             }
 
             if let Some(fields) = variant_info.get("fields").and_then(|v| v.as_object()) {
@@ -256,6 +268,28 @@ pub fn format_schema(schema: &serde_json::Value) -> String {
             }
 
             output.push('\n');
+        }
+
+        // Show hint about hidden variants if filtering
+        if hidden_count > 0 && !show_all {
+            output.push_str(&format!(
+                "  ({} internal variant{} hidden, use --all to show)\n",
+                hidden_count,
+                if hidden_count == 1 { "" } else { "s" }
+            ));
+        }
+
+        // Show message if no callable variants
+        if shown_count == 0 && !show_all {
+            output
+                .push_str("  (no RPC variants - this actor has no callable methods from shell)\n");
+            if hidden_count > 0 {
+                output.push_str(&format!(
+                    "  ({} internal variant{} hidden, use --all to show)\n",
+                    hidden_count,
+                    if hidden_count == 1 { "" } else { "s" }
+                ));
+            }
         }
     }
 

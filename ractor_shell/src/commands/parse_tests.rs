@@ -633,7 +633,10 @@ fn parse_line___schema_without_arg___returns_schema_with_none() {
     let cmd = ShellCommand::parse_line("schema").unwrap();
 
     match cmd {
-        ShellCommand::Schema { actor } => assert!(actor.is_none()),
+        ShellCommand::Schema { actor, show_all } => {
+            assert!(actor.is_none());
+            assert!(!show_all);
+        }
         _ => panic!("Expected Schema command"),
     }
 }
@@ -643,7 +646,49 @@ fn parse_line___schema_with_actor___returns_schema_with_actor() {
     let cmd = ShellCommand::parse_line("schema my_actor").unwrap();
 
     match cmd {
-        ShellCommand::Schema { actor } => assert_eq!(actor, Some("my_actor".to_string())),
+        ShellCommand::Schema { actor, show_all } => {
+            assert_eq!(actor, Some("my_actor".to_string()));
+            assert!(!show_all);
+        }
+        _ => panic!("Expected Schema command"),
+    }
+}
+
+#[test]
+fn parse_line___schema_with_all_flag___returns_schema_with_show_all_true() {
+    let cmd = ShellCommand::parse_line("schema --all my_actor").unwrap();
+
+    match cmd {
+        ShellCommand::Schema { actor, show_all } => {
+            assert_eq!(actor, Some("my_actor".to_string()));
+            assert!(show_all);
+        }
+        _ => panic!("Expected Schema command"),
+    }
+}
+
+#[test]
+fn parse_line___schema_with_short_flag___returns_schema_with_show_all_true() {
+    let cmd = ShellCommand::parse_line("schema -a my_actor").unwrap();
+
+    match cmd {
+        ShellCommand::Schema { actor, show_all } => {
+            assert_eq!(actor, Some("my_actor".to_string()));
+            assert!(show_all);
+        }
+        _ => panic!("Expected Schema command"),
+    }
+}
+
+#[test]
+fn parse_line___schema_flag_after_actor___returns_schema_with_show_all_true() {
+    let cmd = ShellCommand::parse_line("schema my_actor --all").unwrap();
+
+    match cmd {
+        ShellCommand::Schema { actor, show_all } => {
+            assert_eq!(actor, Some("my_actor".to_string()));
+            assert!(show_all);
+        }
         _ => panic!("Expected Schema command"),
     }
 }

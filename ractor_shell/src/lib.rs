@@ -259,7 +259,7 @@ impl ShellState {
                 self.cmd_trace_remote(node, pattern).await
             }
             ShellCommand::TraceRemoteOff => self.cmd_trace_remote_off().await,
-            ShellCommand::Schema { actor } => self.cmd_schema(actor).await,
+            ShellCommand::Schema { actor, show_all } => self.cmd_schema(actor, show_all).await,
             ShellCommand::Ping { node } => self.cmd_ping(node).await,
         }
     }
