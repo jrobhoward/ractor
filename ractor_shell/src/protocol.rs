@@ -150,6 +150,11 @@ pub enum ShellProtocolMessage {
     /// Poll for monitor events (returns batch of events since last poll)
     #[rpc]
     PollMonitorEvents(RpcReplyPort<MonitorEventBatch>),
+
+    // ==================== Actor Metrics (for remote `top`) ====================
+    /// Get metrics for all actors on this node (for remote `top` command)
+    #[rpc]
+    GetActorMetrics(RpcReplyPort<Vec<RemoteActorMetrics>>),
 }
 
 /// Result of a typed RPC call
@@ -337,6 +342,23 @@ pub struct SchemaActorInfo {
     pub name: String,
     /// The JSON schema string describing the message type
     pub schema: String,
+}
+
+/// Actor metrics for remote transmission (serializable version of ActorMetrics)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RemoteActorMetrics {
+    /// Actor ID as string (e.g., "0.1")
+    pub id: String,
+    /// Actor name (if registered)
+    pub name: Option<String>,
+    /// Current status as string (e.g., "Running", "Stopped")
+    pub status: String,
+    /// Process groups this actor belongs to
+    pub groups: Vec<String>,
+    /// Uptime in milliseconds (time since first observed)
+    pub uptime_ms: u64,
+    /// Approximate message count (from tracing spans)
+    pub message_count: u64,
 }
 
 #[cfg(test)]

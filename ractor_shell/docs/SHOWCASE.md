@@ -182,6 +182,40 @@ ractor@127.0.0.1:9001 > info raft_node
 
 ---
 
+## 6.5. Remote Actor Dashboard (top)
+
+The `top` command works both locally and remotely. When connected to a remote node, it fetches and displays actors from that node.
+
+### Launch dashboard for current remote node:
+```
+ractor@127.0.0.1:9001 > top
+Launching actor dashboard for 127.0.0.1:9001... (press 'q' to exit)
+```
+
+The TUI will show:
+- Node name in header: "ractor top - 127.0.0.1:9001 (remote)"
+- All actors registered on that remote node
+- Real-time updates (fetched via RPC every second)
+
+### Switch nodes and view different dashboards:
+```
+ractor@127.0.0.1:9001 > use 9002
+✓ Switched to 127.0.0.1:9002
+
+ractor@127.0.0.1:9002 > top
+```
+
+### Keyboard shortcuts in the dashboard:
+- `q` / `Esc` - Quit
+- `↑`/`k`, `↓`/`j` - Navigate
+- `s` - Cycle sort column
+- `S` - Toggle sort direction
+- `/` - Filter by name/ID
+- `r` - Force refresh
+- `?` - Show help
+
+---
+
 ## 7. Enable Tracing for Raft Events
 
 **Important**: The Raft actors run in the cluster node processes, not the shell. Use `trace remote` to capture their events.

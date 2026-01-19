@@ -265,14 +265,32 @@ impl ShellState {
 
     /// Launch the interactive TUI dashboard.
     async fn cmd_top(&mut self) -> ShellResult<()> {
-        println!(
-            "{}",
-            "Launching actor dashboard... (press 'q' to exit)".cyan()
-        );
-
-        // Run the TUI - this takes over the terminal
-        if let Err(e) = tui::App::run().await {
-            eprintln!("{} {}", "TUI error:".red(), e);
+        // Run the TUI - local or remote depending on current connection
+        if let Some(ref node) = self.current_node {
+            if let Some(introspection_ref) = self.connected_nodes.get(node) {
+                println!(
+                    "{}",
+                    format!(
+                        "Launching actor dashboard for {}... (press 'q' to exit)",
+                        node
+                    )
+                    .cyan()
+                );
+                if let Err(e) = tui::App::run_remote(node.clone(), introspection_ref.clone()).await
+                {
+                    eprintln!("{} {}", "TUI error:".red(), e);
+                }
+            } else {
+                return Err(ShellError::NodeNotConnected(node.clone()));
+            }
+        } else {
+            println!(
+                "{}",
+                "Launching actor dashboard... (press 'q' to exit)".cyan()
+            );
+            if let Err(e) = tui::App::run().await {
+                eprintln!("{} {}", "TUI error:".red(), e);
+            }
         }
 
         Ok(())

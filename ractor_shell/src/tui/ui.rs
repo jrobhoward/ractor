@@ -37,31 +37,54 @@ pub fn render(frame: &mut Frame, app: &App) {
 
 /// Render the header bar.
 fn render_header(frame: &mut Frame, app: &App, area: Rect) {
-    let summary = app.metrics.summary();
+    // Build title based on local vs remote mode
+    let title = if let Some(node_name) = app.node_name() {
+        Line::from(vec![
+            Span::styled("ractor top", Style::default().fg(Color::Cyan).bold()),
+            Span::raw(" - "),
+            Span::styled(node_name, Style::default().fg(Color::Yellow).bold()),
+            Span::styled(" (remote)", Style::default().fg(Color::Yellow)),
+        ])
+    } else {
+        Line::from(vec![
+            Span::styled("ractor top", Style::default().fg(Color::Cyan).bold()),
+            Span::raw(" - Actor Dashboard"),
+        ])
+    };
 
-    let title = Line::from(vec![
-        Span::styled("ractor top", Style::default().fg(Color::Cyan).bold()),
-        Span::raw(" - Actor Dashboard"),
-    ]);
+    // Count actors from the cached list (works for both local and remote)
+    let total = app.actors.len();
+    let running = app
+        .actors
+        .iter()
+        .filter(|a| a.status == ActorStatus::Running)
+        .count();
+    let stopped = app
+        .actors
+        .iter()
+        .filter(|a| a.status == ActorStatus::Stopped)
+        .count();
 
-    let stats = Line::from(vec![
-        Span::raw("  Actors: "),
-        Span::styled(
-            format!("{}", summary.total),
-            Style::default().fg(Color::White).bold(),
-        ),
-        Span::raw(" total | "),
-        Span::styled(
-            format!("{}", summary.running),
-            Style::default().fg(Color::Green),
-        ),
-        Span::raw(" running | "),
-        Span::styled(
-            format!("{}", summary.stopped),
-            Style::default().fg(Color::Red),
-        ),
-        Span::raw(" stopped"),
-    ]);
+    let stats = if let Some(ref error) = app.last_error {
+        // Show error instead of stats
+        Line::from(vec![
+            Span::styled("  Error: ", Style::default().fg(Color::Red).bold()),
+            Span::styled(error, Style::default().fg(Color::Red)),
+        ])
+    } else {
+        Line::from(vec![
+            Span::raw("  Actors: "),
+            Span::styled(
+                format!("{}", total),
+                Style::default().fg(Color::White).bold(),
+            ),
+            Span::raw(" total | "),
+            Span::styled(format!("{}", running), Style::default().fg(Color::Green)),
+            Span::raw(" running | "),
+            Span::styled(format!("{}", stopped), Style::default().fg(Color::Red)),
+            Span::raw(" stopped"),
+        ])
+    };
 
     let header =
         Paragraph::new(vec![title, stats]).block(Block::default().borders(Borders::BOTTOM));

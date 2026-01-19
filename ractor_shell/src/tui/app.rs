@@ -7,9 +7,14 @@ use crossterm::{
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
+use ractor::rpc::CallResult;
+use ractor::ActorRef;
 use ratatui::{backend::CrosstermBackend, Terminal};
 use std::io;
 use std::time::{Duration, Instant};
+
+use crate::protocol::{RemoteActorMetrics, ShellProtocolMessage};
+use crate::DEFAULT_RPC_TIMEOUT;
 
 /// Sort column for the actor table.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -74,7 +79,7 @@ impl SortDirection {
 pub struct App {
     /// Should we exit the application?
     pub should_quit: bool,
-    /// Metrics collector
+    /// Metrics collector (for local mode)
     pub metrics: ActorMetricsCollector,
     /// Cached actor list (refreshed periodically)
     pub actors: Vec<ActorMetrics>,
@@ -94,6 +99,10 @@ pub struct App {
     pub last_refresh: Instant,
     /// Show help overlay?
     pub show_help: bool,
+    /// Remote node connection (node_name, introspection_ref)
+    pub remote_node: Option<(String, ActorRef<ShellProtocolMessage>)>,
+    /// Last error message (for display)
+    pub last_error: Option<String>,
 }
 
 impl Default for App {
@@ -103,7 +112,7 @@ impl Default for App {
 }
 
 impl App {
-    /// Create a new application instance.
+    /// Create a new application instance for local monitoring.
     pub fn new() -> Self {
         Self {
             should_quit: false,
@@ -117,13 +126,54 @@ impl App {
             refresh_interval: Duration::from_secs(1),
             last_refresh: Instant::now() - Duration::from_secs(10), // Force immediate refresh
             show_help: false,
+            remote_node: None,
+            last_error: None,
         }
     }
 
-    /// Run the TUI application.
+    /// Create a new application instance for remote monitoring.
+    pub fn new_remote(
+        node_name: String,
+        introspection_ref: ActorRef<ShellProtocolMessage>,
+    ) -> Self {
+        Self {
+            should_quit: false,
+            metrics: ActorMetricsCollector::new(),
+            actors: Vec::new(),
+            selected: 0,
+            sort_column: SortColumn::default(),
+            sort_direction: SortDirection::default(),
+            filter: String::new(),
+            filter_mode: false,
+            refresh_interval: Duration::from_secs(1),
+            last_refresh: Instant::now() - Duration::from_secs(10), // Force immediate refresh
+            show_help: false,
+            remote_node: Some((node_name, introspection_ref)),
+            last_error: None,
+        }
+    }
+
+    /// Run the TUI application for local monitoring.
     ///
     /// This takes over the terminal and runs until the user exits.
     pub async fn run() -> anyhow::Result<()> {
+        let app = App::new();
+        Self::run_app(app).await
+    }
+
+    /// Run the TUI application for remote monitoring.
+    ///
+    /// This takes over the terminal and runs until the user exits.
+    pub async fn run_remote(
+        node_name: String,
+        introspection_ref: ActorRef<ShellProtocolMessage>,
+    ) -> anyhow::Result<()> {
+        let app = App::new_remote(node_name, introspection_ref);
+        Self::run_app(app).await
+    }
+
+    /// Internal: run the TUI with the given app state.
+    async fn run_app(mut app: App) -> anyhow::Result<()> {
         // Setup terminal
         enable_raw_mode()?;
         let mut stdout = io::stdout();
@@ -131,8 +181,7 @@ impl App {
         let backend = CrosstermBackend::new(stdout);
         let mut terminal = Terminal::new(backend)?;
 
-        // Create app and run main loop
-        let mut app = App::new();
+        // Run main loop
         let result = app.main_loop(&mut terminal).await;
 
         // Restore terminal
@@ -155,7 +204,7 @@ impl App {
         loop {
             // Refresh metrics if needed
             if self.last_refresh.elapsed() >= self.refresh_interval {
-                self.refresh_metrics();
+                self.refresh_metrics().await;
             }
 
             // Draw UI
@@ -176,10 +225,42 @@ impl App {
         Ok(())
     }
 
-    /// Refresh metrics from ractor.
-    fn refresh_metrics(&mut self) {
-        self.metrics.refresh();
-        self.actors = self.metrics.get_all();
+    /// Refresh metrics from ractor (local or remote).
+    async fn refresh_metrics(&mut self) {
+        self.last_error = None;
+
+        if let Some((ref node_name, ref introspection_ref)) = self.remote_node {
+            // Remote mode: fetch metrics via RPC
+            match introspection_ref
+                .call(
+                    ShellProtocolMessage::GetActorMetrics,
+                    Some(DEFAULT_RPC_TIMEOUT),
+                )
+                .await
+            {
+                Ok(CallResult::Success(remote_metrics)) => {
+                    // Convert RemoteActorMetrics to ActorMetrics
+                    self.actors = remote_metrics
+                        .into_iter()
+                        .map(|m| Self::convert_remote_metrics(m))
+                        .collect();
+                }
+                Ok(CallResult::Timeout) => {
+                    self.last_error = Some(format!("Timeout fetching metrics from {}", node_name));
+                }
+                Ok(CallResult::SenderError) => {
+                    self.last_error = Some(format!("Connection lost to {}", node_name));
+                }
+                Err(e) => {
+                    self.last_error = Some(format!("Error: {:?}", e));
+                }
+            }
+        } else {
+            // Local mode: use the metrics collector
+            self.metrics.refresh();
+            self.actors = self.metrics.get_all();
+        }
+
         self.sort_actors();
         self.apply_filter();
         self.last_refresh = Instant::now();
@@ -187,6 +268,32 @@ impl App {
         // Ensure selected index is valid
         if !self.actors.is_empty() && self.selected >= self.actors.len() {
             self.selected = self.actors.len() - 1;
+        }
+    }
+
+    /// Convert remote metrics to local ActorMetrics format.
+    fn convert_remote_metrics(remote: RemoteActorMetrics) -> ActorMetrics {
+        use ractor::ActorStatus;
+
+        // Parse status string back to ActorStatus
+        let status = match remote.status.as_str() {
+            "Running" => ActorStatus::Running,
+            "Stopped" => ActorStatus::Stopped,
+            "Starting" => ActorStatus::Starting,
+            "Stopping" => ActorStatus::Stopping,
+            "Upgrading" => ActorStatus::Upgrading,
+            "Draining" => ActorStatus::Draining,
+            _ => ActorStatus::Running, // Default fallback
+        };
+
+        ActorMetrics {
+            id: remote.id,
+            name: remote.name,
+            status,
+            groups: remote.groups,
+            // Convert uptime_ms back to first_seen (approximate)
+            first_seen: Instant::now() - Duration::from_millis(remote.uptime_ms),
+            message_count: remote.message_count,
         }
     }
 
@@ -237,7 +344,7 @@ impl App {
                 }
                 KeyCode::Enter => {
                     self.filter_mode = false;
-                    self.refresh_metrics(); // Apply filter
+                    self.force_refresh(); // Trigger refresh on next loop iteration
                 }
                 KeyCode::Backspace => {
                     self.filter.pop();
@@ -308,12 +415,12 @@ impl App {
             KeyCode::Char('c') => {
                 // Clear filter
                 self.filter.clear();
-                self.refresh_metrics();
+                self.force_refresh();
             }
 
             // Refresh
             KeyCode::Char('r') => {
-                self.refresh_metrics();
+                self.force_refresh();
             }
 
             // Help
@@ -325,8 +432,23 @@ impl App {
         }
     }
 
+    /// Force a refresh on the next loop iteration.
+    fn force_refresh(&mut self) {
+        self.last_refresh = Instant::now() - Duration::from_secs(10);
+    }
+
     /// Get the filtered actors list for display.
     pub fn visible_actors(&self) -> &[ActorMetrics] {
         &self.actors
+    }
+
+    /// Get the node name if connected to a remote node.
+    pub fn node_name(&self) -> Option<&str> {
+        self.remote_node.as_ref().map(|(name, _)| name.as_str())
+    }
+
+    /// Check if running in remote mode.
+    pub fn is_remote(&self) -> bool {
+        self.remote_node.is_some()
     }
 }

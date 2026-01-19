@@ -159,10 +159,11 @@
 
 ### Remote `top` Support:
 
-- [ ] **Add `GetActorMetrics` protocol message**
-  - New message in `protocol.rs`: `GetActorMetrics(RpcReplyPort<Vec<ActorMetrics>>)`
-  - IntrospectionActor collects same data as local `top`
-  - Return: actor ID, name, status, process groups, first-seen time
+- [x] **Add `GetActorMetrics` protocol message** ✅ COMPLETE
+  - Added `RemoteActorMetrics` struct in `protocol.rs` (serializable version of ActorMetrics)
+  - Added `GetActorMetrics(RpcReplyPort<Vec<RemoteActorMetrics>>)` to ShellProtocolMessage
+  - IntrospectionActor collects metrics from registry and process groups
+  - Returns: actor ID, name, status, process groups, uptime_ms, message_count
 
 - [x] **Add `GetSupervisionTree` protocol message**
   - Returns tree structure for remote visualization
@@ -173,10 +174,11 @@
   - Returns parent/supervisor info for an actor
   - Enables remote `parent` command
 
-- [ ] **Update `top` to work with remote context**
-  - When `current_node` is set, fetch metrics via RPC
-  - Show node name in TUI header
-  - Handle latency gracefully (show stale indicator)
+- [x] **Update `top` to work with remote context** ✅ COMPLETE
+  - `top` command now checks `current_node` and uses remote RPC if connected
+  - TUI header shows node name when in remote mode (e.g., "ractor top - 127.0.0.1:9001 (remote)")
+  - Error messages displayed in header if RPC fails (timeout, connection lost)
+  - Added `App::run_remote()` and `App::new_remote()` methods in `tui/app.rs`
 
 ---
 

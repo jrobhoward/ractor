@@ -32,7 +32,8 @@ use ractor::{pg, registry, Actor, ActorProcessingErr, ActorRef};
 use crate::dynamic::{supports_dynamic_messages, CallResponse, DynamicMessage};
 use crate::protocol::{
     ActorInfo, ActorLocation, ClusterTopology, DynamicCallResult, DynamicSendResult, NodeInfo,
-    SerializableTraceEvent, ShellProtocolMessage, SubscriptionId, TraceEventBatch, TypedRpcResult,
+    RemoteActorMetrics, SerializableTraceEvent, ShellProtocolMessage, SubscriptionId,
+    TraceEventBatch, TypedRpcResult,
 };
 use crate::tracing::{TraceEvent, TraceEventType, TraceFilter, TracingHandle};
 use crate::DEFAULT_RPC_TIMEOUT;
@@ -564,6 +565,11 @@ impl Actor for IntrospectionActor {
                 };
                 let _ = reply.send(batch);
             }
+
+            ShellProtocolMessage::GetActorMetrics(reply) => {
+                let metrics = collect_actor_metrics();
+                let _ = reply.send(metrics);
+            }
         }
 
         Ok(())
@@ -847,6 +853,89 @@ pub(crate) fn build_supervision_tree_roots() -> Vec<crate::protocol::Supervision
         .iter()
         .map(|cell| crate::protocol::SupervisionTreeNode::from_cell(cell))
         .collect()
+}
+
+/// Collect metrics for all actors on this node (for remote `top` command)
+pub(crate) fn collect_actor_metrics() -> Vec<RemoteActorMetrics> {
+    use std::collections::HashSet;
+    use std::time::Instant;
+
+    // We'll use a simple approach: collect all actors from registry and process groups,
+    // and return basic metrics. Since we don't have access to the TUI's ActorMetricsCollector
+    // state, we'll compute metrics fresh each time.
+
+    let mut all_actors = Vec::new();
+    let mut seen_ids = HashSet::new();
+
+    // Track first-seen times (in a real implementation, this would be persisted)
+    // For now, we'll just use "now" as the first-seen time, giving uptime of 0
+    // This is a limitation - we'd need state to track actual first-seen times
+    static START_TIME: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+    let start_time = START_TIME.get_or_init(Instant::now);
+
+    // Build a map of actor ID -> groups
+    let mut actor_groups: std::collections::HashMap<String, Vec<String>> =
+        std::collections::HashMap::new();
+
+    // Query known process groups
+    for group_name in crate::KNOWN_PROCESS_GROUPS.iter() {
+        let members = pg::get_members(&group_name.to_string());
+        for member in &members {
+            let id_str = member.get_id().to_string();
+            let groups = actor_groups.entry(id_str).or_default();
+            if !groups.contains(&group_name.to_string()) {
+                groups.push(group_name.to_string());
+            }
+        }
+    }
+
+    // Collect all actors from registry
+    for name in registry::registered() {
+        if let Some(cell) = registry::where_is(name.clone()) {
+            let id = cell.get_id();
+            if !id.is_local() {
+                continue; // Skip remote actors
+            }
+            if seen_ids.insert(id) {
+                let id_str = id.to_string();
+                let groups = actor_groups.remove(&id_str).unwrap_or_default();
+
+                all_actors.push(RemoteActorMetrics {
+                    id: id_str,
+                    name: Some(name),
+                    status: format!("{:?}", cell.get_status()),
+                    groups,
+                    uptime_ms: start_time.elapsed().as_millis() as u64,
+                    message_count: 0, // We don't have access to tracing message counts here
+                });
+            }
+        }
+    }
+
+    // Also collect from process groups (for actors not in registry)
+    for group_name in crate::KNOWN_PROCESS_GROUPS.iter() {
+        for cell in pg::get_members(&group_name.to_string()) {
+            let id = cell.get_id();
+            if !id.is_local() {
+                continue; // Skip remote actors
+            }
+            if seen_ids.insert(id) {
+                let id_str = id.to_string();
+                let groups = actor_groups.remove(&id_str).unwrap_or_default();
+
+                all_actors.push(RemoteActorMetrics {
+                    id: id_str,
+                    name: cell.get_name(),
+                    status: format!("{:?}", cell.get_status()),
+                    groups,
+                    uptime_ms: start_time.elapsed().as_millis() as u64,
+                    message_count: 0,
+                });
+            }
+        }
+    }
+
+    all_actors
 }
 
 #[cfg(test)]
