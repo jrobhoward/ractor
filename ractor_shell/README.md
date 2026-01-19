@@ -2,6 +2,8 @@
 
 Interactive REPL for Ractor actor systems, inspired by Erlang's `erl` shell.
 
+![top dashboard](docs/images/top_screenshot.png)
+
 ## Requirements
 
 - **Rust**: 1.75+ (uses native async fn in traits)
@@ -246,7 +248,7 @@ impl Actor for MyActor {
 }
 ```
 
-See [DYNAMIC_MESSAGES.md](DYNAMIC_MESSAGES.md) for the complete implementation guide.
+See [DYNAMIC_MESSAGES.md](docs/DYNAMIC_MESSAGES.md) for the complete implementation guide.
 
 ### Actor Monitoring
 
@@ -261,7 +263,7 @@ ractor@local > stop my_actor
 [14:24:12.456] ▼ STOPPED my_actor (0.1)
 ```
 
-See [MONITORING.md](MONITORING.md) for details.
+See [MONITORING.md](docs/MONITORING.md) for details.
 
 ## Configuration
 
@@ -443,7 +445,7 @@ ractor@127.0.0.1:9001 > call raft_node GetStatus {}
 
 ## Architecture
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for detailed component diagrams and design decisions.
+See [ARCHITECTURE.md](docs/ARCHITECTURE.md) for detailed component diagrams and design decisions.
 
 ```mermaid
 flowchart TB
@@ -467,11 +469,12 @@ flowchart TB
 
 | Document | Description |
 |----------|-------------|
-| [ARCHITECTURE.md](ARCHITECTURE.md) | Internal architecture and design decisions |
-| [DYNAMIC_MESSAGES.md](DYNAMIC_MESSAGES.md) | How to create actors that receive JSON from the shell |
-| [MONITORING.md](MONITORING.md) | Actor lifecycle monitoring guide |
-| [UX_FEATURES.md](UX_FEATURES.md) | Tab completion and command aliases |
-| [TESTING.md](TESTING.md) | Testing conventions for contributors |
+| [ARCHITECTURE.md](docs/ARCHITECTURE.md) | Internal architecture and design decisions |
+| [DYNAMIC_MESSAGES.md](docs/DYNAMIC_MESSAGES.md) | How to create actors that receive JSON from the shell |
+| [MONITORING.md](docs/MONITORING.md) | Actor lifecycle monitoring guide |
+| [UX_FEATURES.md](docs/UX_FEATURES.md) | Tab completion and command aliases |
+| [TESTING.md](docs/TESTING.md) | Testing conventions for contributors |
+| [SHOWCASE.md](docs/SHOWCASE.md) | Feature walkthrough with the Raft cluster demo |
 | [SKILLS.md](SKILLS.md) | Development best practices |
 
 ## Current Limitations
@@ -485,7 +488,7 @@ flowchart TB
 
 ## Contributing
 
-Contributions welcome! See [ARCHITECTURE.md](ARCHITECTURE.md) for design context.
+Contributions welcome! See [ARCHITECTURE.md](docs/ARCHITECTURE.md) for design context.
 
 ## License
 

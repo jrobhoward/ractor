@@ -197,5 +197,5 @@ cargo run -p ractor_shell
 - [x] Priority 4 tasks complete (build/test verification)
 - [ ] CHANGELOG.md updated (if exists)
 - [ ] PR description written with summary of changes
-- [ ] Screenshots of `top` command in PR description
+- [x] Screenshots of `top` command added to docs
 - [ ] Core ractor changes reviewed separately if needed

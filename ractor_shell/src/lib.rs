@@ -2574,17 +2574,22 @@ impl ShellState {
     }
 
     async fn cmd_cluster(&mut self, subcommand: Option<String>) -> ShellResult<()> {
-        // We need to be connected to at least one node to query cluster topology
-        if self.connected_nodes.is_empty() {
-            println!(
-                "{}",
-                "Not connected to any nodes. Use 'connect <host:port>' first.".yellow()
-            );
-            return Ok(());
-        }
+        // We need to be connected to a node to query cluster topology
+        let node_name = match &self.current_node {
+            Some(name) => name.clone(),
+            None => {
+                println!(
+                    "{}",
+                    "Not connected to any nodes. Use 'connect <host:port>' first.".yellow()
+                );
+                return Ok(());
+            }
+        };
 
-        // Refresh cluster topology by querying any connected node
-        let (_node_name, introspection_ref) = self.connected_nodes.iter().next().unwrap();
+        let introspection_ref = match self.connected_nodes.get(&node_name) {
+            Some(r) => r.clone(),
+            None => return Err(ShellError::NodeNotConnected(node_name)),
+        };
 
         println!("{}", "Fetching cluster topology...".bright_black());
         let result = introspection_ref
@@ -2633,7 +2638,11 @@ impl ShellState {
                     .map(|node| NodeRow {
                         id: node.id.clone(),
                         name: node.name.clone(),
-                        actors: node.actor_count.to_string(),
+                        actors: if node.is_local {
+                            node.actor_count.to_string()
+                        } else {
+                            "-".to_string()
+                        },
                         is_local: if node.is_local { "yes" } else { "no" }.to_string(),
                     })
                     .collect();

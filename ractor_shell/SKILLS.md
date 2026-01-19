@@ -205,7 +205,7 @@ actor_ref
 
 ## Testing
 
-See [TESTING.md](./TESTING.md) for complete testing conventions.
+See [TESTING.md](./docs/TESTING.md) for complete testing conventions.
 
 ### Test File Organization
 

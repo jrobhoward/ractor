@@ -448,7 +448,7 @@ async fn build_cluster_topology___local_node___includes_local_node_info() {
     .await
     .expect("Failed to spawn actor");
 
-    let topology = build_cluster_topology("test_node");
+    let topology = build_cluster_topology("test_node").await;
 
     // Should have at least one node (local)
     assert!(!topology.nodes.is_empty());

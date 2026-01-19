@@ -21,7 +21,7 @@
 //! ).await?;
 //! ```
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use chrono::DateTime;
@@ -273,7 +273,7 @@ impl Actor for IntrospectionActor {
             }
 
             ShellProtocolMessage::GetClusterTopology(reply) => {
-                let topology = build_cluster_topology(&state.node_name);
+                let topology = build_cluster_topology(&state.node_name).await;
                 let _ = reply.send(topology);
             }
 
@@ -725,15 +725,47 @@ pub(crate) fn wildcard_match(pattern: &str, text: &str) -> bool {
     filter.matches(Some(text))
 }
 
-/// Build cluster topology by examining process groups and actor IDs
-pub(crate) fn build_cluster_topology(local_node_name: &str) -> ClusterTopology {
-    let mut node_ids: HashSet<String> = HashSet::new();
-    let mut node_names: HashMap<String, String> = HashMap::new();
+/// Build cluster topology by examining process groups and querying remote introspection actors
+pub(crate) async fn build_cluster_topology(local_node_name: &str) -> ClusterTopology {
+    // Track remote nodes by their node_id AND name (since node_id alone isn't globally unique)
+    // Key: node_id, Value: node_name
+    let mut remote_nodes: HashMap<u64, String> = HashMap::new();
     let mut process_groups: HashMap<String, Vec<ActorLocation>> = HashMap::new();
 
-    // Discover nodes and process groups by examining well-known groups
-    // In a real implementation, ractor_cluster would provide a proper API for this
-    let known_groups = vec!["ping_pong".to_string(), INTROSPECTION_GROUP.to_string()];
+    let registered = registry::registered();
+    let local_actor_count = registered.len();
+
+    // Query introspection actors in our group to discover remote node names
+    // Each remote introspection actor represents a different cluster node
+    let introspection_members = pg::get_members(&INTROSPECTION_GROUP.to_string());
+    for cell in &introspection_members {
+        let actor_id = cell.get_id();
+
+        if actor_id.is_local() {
+            // Skip local introspection actor - we know our own name
+            continue;
+        }
+
+        // Remote introspection actor - query for its node name
+        let node_id = actor_id.node();
+
+        // Query remote actors to get their node names
+        if let std::collections::hash_map::Entry::Vacant(e) = remote_nodes.entry(node_id) {
+            let actor_ref: ActorRef<ShellProtocolMessage> = cell.clone().into();
+            if let Ok(CallResult::Success(pong)) = actor_ref
+                .call(ShellProtocolMessage::Ping, Some(DEFAULT_RPC_TIMEOUT))
+                .await
+            {
+                // Parse "pong from {node_name}" to extract node name
+                if let Some(name) = pong.strip_prefix("pong from ") {
+                    e.insert(name.to_string());
+                }
+            }
+        }
+    }
+
+    // Discover all process groups and collect actor locations
+    let known_groups = pg::which_groups();
 
     for group_name in known_groups {
         let members = pg::get_members(&group_name);
@@ -741,27 +773,29 @@ pub(crate) fn build_cluster_topology(local_node_name: &str) -> ClusterTopology {
 
         for cell in members {
             let actor_id = cell.get_id();
-            let node_id = extract_node_id(&actor_id.to_string());
 
-            node_ids.insert(node_id.clone());
-
-            // Try to extract node name from registered actors
-            if let Some(_name) = cell.get_name() {
-                // If it's an introspection actor, extract the node name from state
-                // For now, we'll use the node_id as a fallback
-                if !node_names.contains_key(&node_id) {
-                    node_names.insert(node_id.clone(), format!("node_{}", node_id));
-                }
+            // Track any new remote nodes we discover
+            if !actor_id.is_local() && !remote_nodes.contains_key(&actor_id.node()) {
+                // We found a remote actor but don't have its node name yet
+                // Use fallback name
+                remote_nodes.insert(actor_id.node(), format!("node_{}", actor_id.node()));
             }
+
+            // Get node name for this actor
+            let node_name = if actor_id.is_local() {
+                local_node_name.to_string()
+            } else {
+                remote_nodes
+                    .get(&actor_id.node())
+                    .cloned()
+                    .unwrap_or_else(|| format!("node_{}", actor_id.node()))
+            };
 
             locations.push(ActorLocation {
                 actor_id: actor_id.to_string(),
                 actor_name: cell.get_name(),
-                node_id: node_id.clone(),
-                node_name: node_names
-                    .get(&node_id)
-                    .cloned()
-                    .unwrap_or_else(|| format!("node_{}", node_id)),
+                node_id: actor_id.node().to_string(),
+                node_name,
             });
         }
 
@@ -770,41 +804,33 @@ pub(crate) fn build_cluster_topology(local_node_name: &str) -> ClusterTopology {
         }
     }
 
-    // Build node list
-    let registered = registry::registered();
-    let local_actor_count = registered.len();
+    // Build node list: local node + all discovered remote nodes
+    let mut nodes: Vec<NodeInfo> = Vec::new();
 
-    // Get local node ID from any local actor
-    let local_node_id = registered
-        .first()
-        .and_then(|name| registry::where_is(name.clone()))
-        .map(|cell| extract_node_id(&cell.get_id().to_string()))
-        .unwrap_or_else(|| "0".to_string());
+    // Add local node (always first, ID displayed as "local")
+    nodes.push(NodeInfo {
+        id: "local".to_string(),
+        name: local_node_name.to_string(),
+        actor_count: local_actor_count,
+        is_local: true,
+    });
 
-    node_ids.insert(local_node_id.clone());
+    // Add remote nodes
+    for (node_id, node_name) in &remote_nodes {
+        nodes.push(NodeInfo {
+            id: node_id.to_string(),
+            name: node_name.clone(),
+            actor_count: 0, // We don't have remote actor counts
+            is_local: false,
+        });
+    }
 
-    let mut nodes: Vec<NodeInfo> = node_ids
-        .iter()
-        .map(|node_id| {
-            let is_local = node_id == &local_node_id;
-            NodeInfo {
-                id: node_id.clone(),
-                name: if is_local {
-                    local_node_name.to_string()
-                } else {
-                    node_names
-                        .get(node_id)
-                        .cloned()
-                        .unwrap_or_else(|| format!("node_{}", node_id))
-                },
-                actor_count: if is_local { local_actor_count } else { 0 },
-                is_local,
-            }
-        })
-        .collect();
-
-    // Sort nodes by ID for consistent output
-    nodes.sort_by(|a, b| a.id.cmp(&b.id));
+    // Sort: local first, then remote nodes by name
+    nodes.sort_by(|a, b| match (a.is_local, b.is_local) {
+        (true, false) => std::cmp::Ordering::Less,
+        (false, true) => std::cmp::Ordering::Greater,
+        _ => a.name.cmp(&b.name),
+    });
 
     ClusterTopology {
         nodes,
@@ -813,6 +839,8 @@ pub(crate) fn build_cluster_topology(local_node_name: &str) -> ClusterTopology {
 }
 
 /// Extract node ID from an actor ID string (e.g., "1.0" -> "1")
+/// Note: This is kept for backward compatibility and tests. Prefer using ActorId::node() directly.
+#[cfg(test)]
 pub(crate) fn extract_node_id(actor_id: &str) -> String {
     actor_id.split('.').next().unwrap_or("0").to_string()
 }

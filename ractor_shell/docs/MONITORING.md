@@ -335,6 +335,6 @@ Planned improvements for the monitoring system:
 
 ## See Also
 
-- [TESTING_PHASE3.md](TESTING_PHASE3.md) - Testing guide for monitoring
-- [src/monitor.rs](src/monitor.rs) - Monitor implementation
-- [examples/monitoring_demo.rs](examples/monitoring_demo.rs) - Working example
+- [TESTING.md](TESTING.md) - Testing conventions
+- [../src/monitor.rs](../src/monitor.rs) - Monitor implementation
+- [../examples/monitoring_demo.rs](../examples/monitoring_demo.rs) - Working example

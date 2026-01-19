@@ -42,10 +42,8 @@ ractor@127.0.0.1:9001 > connect 127.0.0.1:9002
 ractor@127.0.0.1:9002 > connect 127.0.0.1:9003
 ✓ Connected to 127.0.0.1:9003
 
-ractor@127.0.0.1:9003 > use 9001
+ractor@127.0.0.1:9003 > use 127.0.0.1:9001
 ✓ Switched to 127.0.0.1:9001
-
-ractor@127.0.0.1:9001 >
 ```
 
 The prompt changes to show the currently active connection. Use `use <port>` to switch between connected nodes.
@@ -87,19 +85,22 @@ ractor@127.0.0.1:9001 > pg members raft_cluster
 ```
 ractor@127.0.0.1:9001 > call raft_node GetStatus {}
 {
+  "election_generation": 4761,
+  "leader": "node_c",
+  "ms_since_heartbeat": 27,
   "node_name": "node_a",
+  "peer_names": [
+    "node_c",
+    "node_b"
+  ],
   "role": "Follower",
-  "term": 3,
-  "leader": "node_b",
-  "voted_for": "node_b",
-  "peer_names": ["node_b", "node_c"],
-  "election_generation": 5,
-  "ms_since_heartbeat": 142,
+  "term": 6,
+  "voted_for": null,
   "votes_received": 0
 }
 ```
 
-The enhanced status shows:
+The status shows:
 - `peer_names`: List of known peer node names
 - `election_generation`: How many times the election timer has been reset
 - `ms_since_heartbeat`: Milliseconds since last heartbeat (followers only, null for leaders)
@@ -114,13 +115,16 @@ false
 ### Get the current leader's name:
 ```
 ractor@127.0.0.1:9001 > call raft_node GetLeader {}
-"node_b"
+"node_c"
 ```
 
 ### List known peers:
 ```
 ractor@127.0.0.1:9001 > call raft_node GetPeers {}
-["node_b", "node_c"]
+[
+  "node_c",
+  "node_b"
+]
 ```
 
 ---
@@ -137,18 +141,6 @@ true
 
 ractor@127.0.0.1:9001 > call raft_node IsPeer {"0": "unknown_node"}
 false
-```
-
-### Error handling for missing arguments:
-```
-ractor@127.0.0.1:9001 > call raft_node IsPeer {}
-✗ RPC failed: Missing required field '0'
-```
-
-### Error handling for wrong types:
-```
-ractor@127.0.0.1:9001 > call raft_node IsPeer {"0": 12345}
-✗ RPC failed: Invalid field '0': invalid type: integer `12345`, expected a string
 ```
 
 ### View the message schema to see available RPCs:
@@ -197,23 +189,6 @@ The TUI will show:
 - All actors registered on that remote node
 - Real-time updates (fetched via RPC every second)
 
-### Switch nodes and view different dashboards:
-```
-ractor@127.0.0.1:9001 > use 9002
-✓ Switched to 127.0.0.1:9002
-
-ractor@127.0.0.1:9002 > top
-```
-
-### Keyboard shortcuts in the dashboard:
-- `q` / `Esc` - Quit
-- `↑`/`k`, `↓`/`j` - Navigate
-- `s` - Cycle sort column
-- `S` - Toggle sort direction
-- `/` - Filter by name/ID
-- `r` - Force refresh
-- `?` - Show help
-
 ---
 
 ## 7. Enable Tracing for Raft Events
@@ -256,9 +231,6 @@ Active patterns: ...
 Minimum level: INFO
 ```
 
-### Local tracing (for shell's own process):
-The `trace <pattern>` command (without `-remote`) only captures events in the shell process itself, not from remote cluster nodes.
-
 ---
 
 ## 8. Monitor Actor Lifecycle Events
@@ -272,8 +244,8 @@ ractor@127.0.0.1:9001 > monitor raft_node
 ### List monitored actors:
 ```
 ractor@127.0.0.1:9001 > monitors
-Monitored actors:
-  - raft_node
+Monitored Actors on 127.0.0.1:9001:
+  • raft_node
 ```
 
 ---
@@ -291,29 +263,29 @@ ractor@127.0.0.1:9001 > call raft_node GetLeader {}
 Switch to the leader node (we connected to all nodes in step 2):
 ```
 # If node_b is leader:
-ractor@127.0.0.1:9001 > use 9002
+ractor@127.0.0.1:9001 > use 127.0.0.1:9002
 ✓ Switched to 127.0.0.1:9002
 
 # Or if node_c is leader:
-ractor@127.0.0.1:9001 > use 9003
+ractor@127.0.0.1:9001 > use 127.0.0.1:9003
 ✓ Switched to 127.0.0.1:9003
 ```
 
 Verify you're on the leader:
 ```
-ractor@127.0.0.1:9002 > call raft_node IsLeader {}
+ractor@127.0.0.1:9003 > call raft_node IsLeader {}
 true
 ```
 
 ### Subscribe to traces before triggering election:
 ```
-ractor@127.0.0.1:9002 > trace remote 127.0.0.1:9002 *raft*
-✓ Subscribed to traces from 127.0.0.1:9002 matching: raft*
+ractor@127.0.0.1:9003 > trace remote 127.0.0.1:9003 *raft*
+✓ Subscribed to traces from 127.0.0.1:9003 matching: raft*
 ```
 
 ### Force the leader to step down:
 ```
-ractor@127.0.0.1:9002 > call raft_node StepDown {}
+ractor@127.0.0.1:9003 > call raft_node StepDown {}
 true
 ```
 
@@ -329,8 +301,8 @@ Note: Events appear as they're polled from the remote node. There may be a sligh
 
 ### Verify new leader:
 ```
-ractor@127.0.0.1:9002 > call raft_node GetLeader {}
-"node_a"
+ractor@127.0.0.1:9003 > call raft_node GetLeader {}
+"node_b"
 ```
 
 ---
@@ -386,11 +358,16 @@ ractor@127.0.0.1:9002 > call raft_node GetStatus {}
 ractor@127.0.0.1:9001 > top
 ```
 
+![top dashboard](images/top_screenshot.png)
+
 **Navigation:**
 - `↑/↓` or `j/k` - Navigate actor list
 - `s` - Change sort column
-- `f` - Filter actors
+- `S` - Toggle sort direction
+- `/` - Filter actors by name
+- `c` - Clear filter
 - `r` - Refresh
+- `?` - Show help
 - `q` - Quit
 
 ---
