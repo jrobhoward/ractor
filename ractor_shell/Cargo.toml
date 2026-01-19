@@ -2,7 +2,7 @@
 name = "ractor_shell"
 version = "0.1.0"
 edition = "2021"
-authors = ["Sean Lawlor", "Evan Au", "Dillon George"]
+authors = ["James Howard"]
 description = "Interactive REPL for Ractor actor systems, inspired by Erlang's erl shell"
 license = "MIT"
 repository = "https://github.com/slawlor/ractor"

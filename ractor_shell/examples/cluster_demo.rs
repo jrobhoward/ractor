@@ -152,6 +152,7 @@ async fn main() -> anyhow::Result<()> {
 }
 
 /// Run as a cluster node with Raft leader election
+#[allow(clippy::too_many_arguments)]
 async fn run_node(
     port: u16,
     name: String,

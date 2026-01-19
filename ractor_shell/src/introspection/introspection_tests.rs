@@ -5,6 +5,7 @@ use super::*;
 use crate::dynamic::{CallResponse, DynamicMessage};
 use crate::protocol::{DynamicCallResult, DynamicSendResult, TypedRpcResult};
 use crate::tracing::{TraceEvent, TraceEventType};
+use crate::DEFAULT_RPC_TIMEOUT;
 use chrono::Local;
 use ractor::{Actor, ActorProcessingErr, ActorRef};
 
