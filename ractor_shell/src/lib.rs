@@ -3641,7 +3641,7 @@ pub enum ShellCommand {
 
 impl ShellCommand {
     /// Resolve command aliases
-    fn resolve_alias(cmd: &str) -> &str {
+    pub(crate) fn resolve_alias(cmd: &str) -> &str {
         match cmd {
             // Actor inspection
             "a" => "actors",

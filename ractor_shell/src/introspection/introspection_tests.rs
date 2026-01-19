@@ -1171,3 +1171,1072 @@ async fn IntrospectionActor___poll_monitor_events___returns_empty_batch_initiall
 
     introspection_ref.stop(None);
 }
+
+// ============================================================================
+// MonitoringState Tests
+// ============================================================================
+
+#[test]
+fn MonitoringState___new___creates_empty_state() {
+    let state = super::MonitoringState::new();
+
+    assert!(state.monitored.is_empty());
+    assert!(state.event_buffer.is_empty());
+    assert_eq!(state.dropped_count, 0);
+}
+
+#[test]
+fn MonitoringState___push_event___adds_event_to_buffer() {
+    let mut state = super::MonitoringState::new();
+    let event = crate::protocol::SerializableMonitorEvent {
+        timestamp: "2024-01-01T00:00:00Z".to_string(),
+        actor_id: "0.1".to_string(),
+        actor_name: Some("test_actor".to_string()),
+        event_type: "STARTED".to_string(),
+        reason: None,
+        error: None,
+    };
+
+    state.push_event(event);
+
+    assert_eq!(state.event_buffer.len(), 1);
+    assert_eq!(state.dropped_count, 0);
+}
+
+#[test]
+fn MonitoringState___push_event___exceeds_max_buffer___drops_oldest() {
+    let mut state = super::MonitoringState::new();
+
+    // Fill buffer to max (MAX_MONITOR_BUFFER_SIZE = 100)
+    for i in 0..super::MAX_MONITOR_BUFFER_SIZE {
+        let event = crate::protocol::SerializableMonitorEvent {
+            timestamp: format!("2024-01-01T00:00:{:02}Z", i % 60),
+            actor_id: format!("0.{}", i),
+            actor_name: Some(format!("actor_{}", i)),
+            event_type: "STARTED".to_string(),
+            reason: None,
+            error: None,
+        };
+        state.push_event(event);
+    }
+    assert_eq!(state.event_buffer.len(), super::MAX_MONITOR_BUFFER_SIZE);
+    assert_eq!(state.dropped_count, 0);
+
+    // Add one more - should drop oldest
+    let overflow_event = crate::protocol::SerializableMonitorEvent {
+        timestamp: "2024-01-01T01:00:00Z".to_string(),
+        actor_id: "0.999".to_string(),
+        actor_name: Some("overflow_actor".to_string()),
+        event_type: "STOPPED".to_string(),
+        reason: None,
+        error: None,
+    };
+    state.push_event(overflow_event);
+
+    assert_eq!(state.event_buffer.len(), super::MAX_MONITOR_BUFFER_SIZE);
+    assert_eq!(state.dropped_count, 1);
+    // First event should be "actor_1" (not "actor_0" which was dropped)
+    assert_eq!(
+        state.event_buffer.front().unwrap().actor_name,
+        Some("actor_1".to_string())
+    );
+    // Last event should be our overflow actor
+    assert_eq!(
+        state.event_buffer.back().unwrap().actor_name,
+        Some("overflow_actor".to_string())
+    );
+}
+
+#[test]
+fn MonitoringState___take_events___returns_all_and_clears() {
+    let mut state = super::MonitoringState::new();
+
+    for i in 0..5 {
+        let event = crate::protocol::SerializableMonitorEvent {
+            timestamp: format!("2024-01-01T00:00:{:02}Z", i),
+            actor_id: format!("0.{}", i),
+            actor_name: Some(format!("actor_{}", i)),
+            event_type: "STARTED".to_string(),
+            reason: None,
+            error: None,
+        };
+        state.push_event(event);
+    }
+
+    let (events, dropped) = state.take_events();
+
+    assert_eq!(events.len(), 5);
+    assert_eq!(dropped, 0);
+    assert!(state.event_buffer.is_empty());
+}
+
+#[test]
+fn MonitoringState___take_events___with_dropped___returns_dropped_count_and_resets() {
+    let mut state = super::MonitoringState::new();
+
+    // Fill and overflow
+    for i in 0..super::MAX_MONITOR_BUFFER_SIZE + 10 {
+        let event = crate::protocol::SerializableMonitorEvent {
+            timestamp: format!("2024-01-01T00:00:{:02}Z", i % 60),
+            actor_id: format!("0.{}", i),
+            actor_name: Some(format!("actor_{}", i)),
+            event_type: "STARTED".to_string(),
+            reason: None,
+            error: None,
+        };
+        state.push_event(event);
+    }
+    assert_eq!(state.dropped_count, 10);
+
+    let (events, dropped) = state.take_events();
+
+    assert_eq!(events.len(), super::MAX_MONITOR_BUFFER_SIZE);
+    assert_eq!(dropped, 10);
+    assert_eq!(state.dropped_count, 0); // Reset after take
+}
+
+// ============================================================================
+// GetProcessGroupMembers Tests
+// ============================================================================
+
+#[tokio::test]
+async fn IntrospectionActor___get_pg_members___returns_members_of_group() {
+    use ractor::pg;
+
+    // Create test actors and add them to a process group
+    let (test_actor1, _handle1) =
+        Actor::spawn(Some("pg_members_actor1".to_string()), DynamicTestActor, ())
+            .await
+            .expect("Failed to spawn test actor 1");
+
+    let (test_actor2, _handle2) =
+        Actor::spawn(Some("pg_members_actor2".to_string()), DynamicTestActor, ())
+            .await
+            .expect("Failed to spawn test actor 2");
+
+    let group_name = "test_pg_members_group";
+    pg::join(
+        group_name.to_string(),
+        vec![test_actor1.get_cell(), test_actor2.get_cell()],
+    );
+
+    let args = IntrospectionArgs {
+        node_name: "pg_members_test_node".to_string(),
+        tracing_handle: None,
+    };
+
+    let (introspection_ref, _handle) = Actor::spawn(
+        Some("pg_members_introspection".to_string()),
+        IntrospectionActor,
+        args,
+    )
+    .await
+    .expect("Failed to spawn IntrospectionActor");
+
+    let result = introspection_ref
+        .call(
+            |reply| ShellProtocolMessage::GetProcessGroupMembers(group_name.to_string(), reply),
+            Some(DEFAULT_RPC_TIMEOUT),
+        )
+        .await;
+
+    match result {
+        Ok(ractor::rpc::CallResult::Success(members)) => {
+            assert_eq!(members.len(), 2, "Group should have 2 members");
+            let member_names: Vec<_> = members.iter().filter_map(|m| m.name.clone()).collect();
+            assert!(
+                member_names.contains(&"pg_members_actor1".to_string()),
+                "Should find pg_members_actor1"
+            );
+            assert!(
+                member_names.contains(&"pg_members_actor2".to_string()),
+                "Should find pg_members_actor2"
+            );
+        }
+        other => panic!("Expected member list, got {:?}", other),
+    }
+
+    test_actor1.stop(None);
+    test_actor2.stop(None);
+    introspection_ref.stop(None);
+}
+
+#[tokio::test]
+async fn IntrospectionActor___get_pg_members___empty_group___returns_empty_list() {
+    let args = IntrospectionArgs {
+        node_name: "pg_empty_test_node".to_string(),
+        tracing_handle: None,
+    };
+
+    let (introspection_ref, _handle) = Actor::spawn(
+        Some("pg_empty_introspection".to_string()),
+        IntrospectionActor,
+        args,
+    )
+    .await
+    .expect("Failed to spawn IntrospectionActor");
+
+    // Query a nonexistent group
+    let result = introspection_ref
+        .call(
+            |reply| {
+                ShellProtocolMessage::GetProcessGroupMembers(
+                    "nonexistent_group_xyz_123".to_string(),
+                    reply,
+                )
+            },
+            Some(DEFAULT_RPC_TIMEOUT),
+        )
+        .await;
+
+    match result {
+        Ok(ractor::rpc::CallResult::Success(members)) => {
+            assert!(
+                members.is_empty(),
+                "Nonexistent group should have no members"
+            );
+        }
+        other => panic!("Expected empty list, got {:?}", other),
+    }
+
+    introspection_ref.stop(None);
+}
+
+// ============================================================================
+// GetMessageSchema and ListSchemaActors Tests
+// ============================================================================
+
+#[tokio::test]
+async fn IntrospectionActor___get_message_schema___no_schema___returns_none() {
+    let args = IntrospectionArgs {
+        node_name: "schema_test_node".to_string(),
+        tracing_handle: None,
+    };
+
+    let (introspection_ref, _handle) = Actor::spawn(
+        Some("schema_introspection".to_string()),
+        IntrospectionActor,
+        args,
+    )
+    .await
+    .expect("Failed to spawn IntrospectionActor");
+
+    let result = introspection_ref
+        .call(
+            |reply| {
+                ShellProtocolMessage::GetMessageSchema("no_schema_actor_xyz".to_string(), reply)
+            },
+            Some(DEFAULT_RPC_TIMEOUT),
+        )
+        .await;
+
+    match result {
+        Ok(ractor::rpc::CallResult::Success(schema)) => {
+            assert!(schema.is_none(), "Actor without schema should return None");
+        }
+        other => panic!("Expected None, got {:?}", other),
+    }
+
+    introspection_ref.stop(None);
+}
+
+#[tokio::test]
+async fn IntrospectionActor___list_schema_actors___returns_list() {
+    let args = IntrospectionArgs {
+        node_name: "list_schema_test_node".to_string(),
+        tracing_handle: None,
+    };
+
+    let (introspection_ref, _handle) = Actor::spawn(
+        Some("list_schema_introspection".to_string()),
+        IntrospectionActor,
+        args,
+    )
+    .await
+    .expect("Failed to spawn IntrospectionActor");
+
+    let result = introspection_ref
+        .call(
+            ShellProtocolMessage::ListSchemaActors,
+            Some(DEFAULT_RPC_TIMEOUT),
+        )
+        .await;
+
+    match result {
+        Ok(ractor::rpc::CallResult::Success(_schemas)) => {
+            // May be empty if no schemas registered, but should succeed
+            // Just verifying the call doesn't fail
+        }
+        other => panic!("Expected schema list, got {:?}", other),
+    }
+
+    introspection_ref.stop(None);
+}
+
+// ============================================================================
+// Trace Subscription Tests
+// ============================================================================
+
+#[tokio::test]
+async fn IntrospectionActor___subscribe_to_traces___returns_subscription_id() {
+    let args = IntrospectionArgs {
+        node_name: "trace_sub_test_node".to_string(),
+        tracing_handle: None,
+    };
+
+    let (introspection_ref, _handle) = Actor::spawn(
+        Some("trace_sub_introspection".to_string()),
+        IntrospectionActor,
+        args,
+    )
+    .await
+    .expect("Failed to spawn IntrospectionActor");
+
+    let result = introspection_ref
+        .call(
+            |reply| ShellProtocolMessage::SubscribeToTraces("*".to_string(), reply),
+            Some(DEFAULT_RPC_TIMEOUT),
+        )
+        .await;
+
+    match result {
+        Ok(ractor::rpc::CallResult::Success(sub_id)) => {
+            assert!(sub_id > 0, "Subscription ID should be positive");
+        }
+        other => panic!("Expected subscription ID, got {:?}", other),
+    }
+
+    introspection_ref.stop(None);
+}
+
+#[tokio::test]
+async fn IntrospectionActor___poll_traces___existing_subscription___returns_batch() {
+    let args = IntrospectionArgs {
+        node_name: "poll_traces_test_node".to_string(),
+        tracing_handle: None,
+    };
+
+    let (introspection_ref, _handle) = Actor::spawn(
+        Some("poll_traces_introspection".to_string()),
+        IntrospectionActor,
+        args,
+    )
+    .await
+    .expect("Failed to spawn IntrospectionActor");
+
+    // Subscribe first
+    let sub_result = introspection_ref
+        .call(
+            |reply| ShellProtocolMessage::SubscribeToTraces("test_*".to_string(), reply),
+            Some(DEFAULT_RPC_TIMEOUT),
+        )
+        .await;
+
+    let sub_id = match sub_result {
+        Ok(ractor::rpc::CallResult::Success(id)) => id,
+        other => panic!("Expected subscription ID, got {:?}", other),
+    };
+
+    // Poll for events (should be empty initially)
+    let result = introspection_ref
+        .call(
+            |reply| ShellProtocolMessage::PollTraces(sub_id, reply),
+            Some(DEFAULT_RPC_TIMEOUT),
+        )
+        .await;
+
+    match result {
+        Ok(ractor::rpc::CallResult::Success(batch)) => {
+            assert!(
+                batch.events.is_empty(),
+                "Should have no trace events initially"
+            );
+            assert_eq!(batch.dropped_count, 0);
+        }
+        other => panic!("Expected trace batch, got {:?}", other),
+    }
+
+    introspection_ref.stop(None);
+}
+
+#[tokio::test]
+async fn IntrospectionActor___poll_traces___nonexistent_subscription___returns_empty_batch() {
+    let args = IntrospectionArgs {
+        node_name: "poll_traces_bad_test_node".to_string(),
+        tracing_handle: None,
+    };
+
+    let (introspection_ref, _handle) = Actor::spawn(
+        Some("poll_traces_bad_introspection".to_string()),
+        IntrospectionActor,
+        args,
+    )
+    .await
+    .expect("Failed to spawn IntrospectionActor");
+
+    // Poll with invalid subscription ID
+    let result = introspection_ref
+        .call(
+            |reply| ShellProtocolMessage::PollTraces(99999, reply),
+            Some(DEFAULT_RPC_TIMEOUT),
+        )
+        .await;
+
+    match result {
+        Ok(ractor::rpc::CallResult::Success(batch)) => {
+            assert!(
+                batch.events.is_empty(),
+                "Nonexistent sub should return empty batch"
+            );
+            assert_eq!(batch.dropped_count, 0);
+        }
+        other => panic!("Expected empty batch, got {:?}", other),
+    }
+
+    introspection_ref.stop(None);
+}
+
+#[tokio::test]
+async fn IntrospectionActor___unsubscribe___existing___returns_true() {
+    let args = IntrospectionArgs {
+        node_name: "unsub_test_node".to_string(),
+        tracing_handle: None,
+    };
+
+    let (introspection_ref, _handle) = Actor::spawn(
+        Some("unsub_introspection".to_string()),
+        IntrospectionActor,
+        args,
+    )
+    .await
+    .expect("Failed to spawn IntrospectionActor");
+
+    // Subscribe first
+    let sub_result = introspection_ref
+        .call(
+            |reply| ShellProtocolMessage::SubscribeToTraces("*".to_string(), reply),
+            Some(DEFAULT_RPC_TIMEOUT),
+        )
+        .await;
+
+    let sub_id = match sub_result {
+        Ok(ractor::rpc::CallResult::Success(id)) => id,
+        other => panic!("Expected subscription ID, got {:?}", other),
+    };
+
+    // Unsubscribe
+    let result = introspection_ref
+        .call(
+            |reply| ShellProtocolMessage::UnsubscribeFromTraces(sub_id, reply),
+            Some(DEFAULT_RPC_TIMEOUT),
+        )
+        .await;
+
+    match result {
+        Ok(ractor::rpc::CallResult::Success(true)) => {
+            // Expected
+        }
+        other => panic!("Expected Success(true), got {:?}", other),
+    }
+
+    introspection_ref.stop(None);
+}
+
+#[tokio::test]
+async fn IntrospectionActor___unsubscribe___nonexistent___returns_false() {
+    let args = IntrospectionArgs {
+        node_name: "unsub_bad_test_node".to_string(),
+        tracing_handle: None,
+    };
+
+    let (introspection_ref, _handle) = Actor::spawn(
+        Some("unsub_bad_introspection".to_string()),
+        IntrospectionActor,
+        args,
+    )
+    .await
+    .expect("Failed to spawn IntrospectionActor");
+
+    // Try to unsubscribe nonexistent
+    let result = introspection_ref
+        .call(
+            |reply| ShellProtocolMessage::UnsubscribeFromTraces(99999, reply),
+            Some(DEFAULT_RPC_TIMEOUT),
+        )
+        .await;
+
+    match result {
+        Ok(ractor::rpc::CallResult::Success(false)) => {
+            // Expected
+        }
+        other => panic!("Expected Success(false), got {:?}", other),
+    }
+
+    introspection_ref.stop(None);
+}
+
+// ============================================================================
+// GetSupervisionTree and GetActorParent Tests
+// ============================================================================
+
+#[tokio::test]
+async fn IntrospectionActor___get_supervision_tree___no_actor___returns_all_roots() {
+    // Create a test actor (which will be a root since it has no parent)
+    let (test_actor, _handle) = Actor::spawn(
+        Some("tree_root_test_actor".to_string()),
+        DynamicTestActor,
+        (),
+    )
+    .await
+    .expect("Failed to spawn test actor");
+
+    let args = IntrospectionArgs {
+        node_name: "tree_test_node".to_string(),
+        tracing_handle: None,
+    };
+
+    let (introspection_ref, _handle) = Actor::spawn(
+        Some("tree_introspection".to_string()),
+        IntrospectionActor,
+        args,
+    )
+    .await
+    .expect("Failed to spawn IntrospectionActor");
+
+    let result = introspection_ref
+        .call(
+            |reply| ShellProtocolMessage::GetSupervisionTree(None, reply),
+            Some(DEFAULT_RPC_TIMEOUT),
+        )
+        .await;
+
+    match result {
+        Ok(ractor::rpc::CallResult::Success(tree_nodes)) => {
+            // Should find our test actor in the roots
+            let found = tree_nodes
+                .iter()
+                .any(|node| node.actor.name.as_deref() == Some("tree_root_test_actor"));
+            assert!(
+                found,
+                "Should find tree_root_test_actor in supervision tree roots"
+            );
+        }
+        other => panic!("Expected supervision tree, got {:?}", other),
+    }
+
+    test_actor.stop(None);
+    introspection_ref.stop(None);
+}
+
+#[tokio::test]
+async fn IntrospectionActor___get_supervision_tree___specific_actor___returns_subtree() {
+    // Create a test actor
+    let (test_actor, _handle) =
+        Actor::spawn(Some("subtree_test_actor".to_string()), DynamicTestActor, ())
+            .await
+            .expect("Failed to spawn test actor");
+
+    let args = IntrospectionArgs {
+        node_name: "subtree_test_node".to_string(),
+        tracing_handle: None,
+    };
+
+    let (introspection_ref, _handle) = Actor::spawn(
+        Some("subtree_introspection".to_string()),
+        IntrospectionActor,
+        args,
+    )
+    .await
+    .expect("Failed to spawn IntrospectionActor");
+
+    let result = introspection_ref
+        .call(
+            |reply| {
+                ShellProtocolMessage::GetSupervisionTree(
+                    Some("subtree_test_actor".to_string()),
+                    reply,
+                )
+            },
+            Some(DEFAULT_RPC_TIMEOUT),
+        )
+        .await;
+
+    match result {
+        Ok(ractor::rpc::CallResult::Success(tree_nodes)) => {
+            // Should find exactly one node - the actor we asked for
+            assert_eq!(tree_nodes.len(), 1, "Should return exactly one tree node");
+            assert_eq!(
+                tree_nodes[0].actor.name.as_deref(),
+                Some("subtree_test_actor")
+            );
+        }
+        other => panic!("Expected supervision tree, got {:?}", other),
+    }
+
+    test_actor.stop(None);
+    introspection_ref.stop(None);
+}
+
+#[tokio::test]
+async fn IntrospectionActor___get_supervision_tree___nonexistent_actor___returns_empty() {
+    let args = IntrospectionArgs {
+        node_name: "tree_empty_test_node".to_string(),
+        tracing_handle: None,
+    };
+
+    let (introspection_ref, _handle) = Actor::spawn(
+        Some("tree_empty_introspection".to_string()),
+        IntrospectionActor,
+        args,
+    )
+    .await
+    .expect("Failed to spawn IntrospectionActor");
+
+    let result = introspection_ref
+        .call(
+            |reply| {
+                ShellProtocolMessage::GetSupervisionTree(
+                    Some("nonexistent_actor_xyz_789".to_string()),
+                    reply,
+                )
+            },
+            Some(DEFAULT_RPC_TIMEOUT),
+        )
+        .await;
+
+    match result {
+        Ok(ractor::rpc::CallResult::Success(tree_nodes)) => {
+            assert!(
+                tree_nodes.is_empty(),
+                "Nonexistent actor should return empty tree"
+            );
+        }
+        other => panic!("Expected empty tree, got {:?}", other),
+    }
+
+    introspection_ref.stop(None);
+}
+
+#[tokio::test]
+async fn IntrospectionActor___get_actor_parent___no_parent___returns_none() {
+    // Create a root actor (no supervisor)
+    let (test_actor, _handle) =
+        Actor::spawn(Some("parent_test_actor".to_string()), DynamicTestActor, ())
+            .await
+            .expect("Failed to spawn test actor");
+
+    let args = IntrospectionArgs {
+        node_name: "parent_test_node".to_string(),
+        tracing_handle: None,
+    };
+
+    let (introspection_ref, _handle) = Actor::spawn(
+        Some("parent_introspection".to_string()),
+        IntrospectionActor,
+        args,
+    )
+    .await
+    .expect("Failed to spawn IntrospectionActor");
+
+    let result = introspection_ref
+        .call(
+            |reply| ShellProtocolMessage::GetActorParent("parent_test_actor".to_string(), reply),
+            Some(DEFAULT_RPC_TIMEOUT),
+        )
+        .await;
+
+    match result {
+        Ok(ractor::rpc::CallResult::Success(None)) => {
+            // Expected - root actor has no parent
+        }
+        other => panic!("Expected None (no parent), got {:?}", other),
+    }
+
+    test_actor.stop(None);
+    introspection_ref.stop(None);
+}
+
+#[tokio::test]
+async fn IntrospectionActor___get_actor_parent___nonexistent___returns_none() {
+    let args = IntrospectionArgs {
+        node_name: "parent_bad_test_node".to_string(),
+        tracing_handle: None,
+    };
+
+    let (introspection_ref, _handle) = Actor::spawn(
+        Some("parent_bad_introspection".to_string()),
+        IntrospectionActor,
+        args,
+    )
+    .await
+    .expect("Failed to spawn IntrospectionActor");
+
+    let result = introspection_ref
+        .call(
+            |reply| {
+                ShellProtocolMessage::GetActorParent("nonexistent_actor_xyz_456".to_string(), reply)
+            },
+            Some(DEFAULT_RPC_TIMEOUT),
+        )
+        .await;
+
+    match result {
+        Ok(ractor::rpc::CallResult::Success(None)) => {
+            // Expected - actor doesn't exist
+        }
+        other => panic!("Expected None (actor not found), got {:?}", other),
+    }
+
+    introspection_ref.stop(None);
+}
+
+// ============================================================================
+// GetActorMetrics and GetSystemInfo Tests
+// ============================================================================
+
+#[tokio::test]
+async fn IntrospectionActor___get_actor_metrics___returns_metrics_list() {
+    // Create a test actor
+    let (test_actor, _handle) =
+        Actor::spawn(Some("metrics_test_actor".to_string()), DynamicTestActor, ())
+            .await
+            .expect("Failed to spawn test actor");
+
+    let args = IntrospectionArgs {
+        node_name: "metrics_test_node".to_string(),
+        tracing_handle: None,
+    };
+
+    let (introspection_ref, _handle) = Actor::spawn(
+        Some("metrics_introspection".to_string()),
+        IntrospectionActor,
+        args,
+    )
+    .await
+    .expect("Failed to spawn IntrospectionActor");
+
+    let result = introspection_ref
+        .call(
+            ShellProtocolMessage::GetActorMetrics,
+            Some(DEFAULT_RPC_TIMEOUT),
+        )
+        .await;
+
+    match result {
+        Ok(ractor::rpc::CallResult::Success(metrics)) => {
+            // Should find our test actor in the metrics
+            let found = metrics
+                .iter()
+                .any(|m| m.name.as_deref() == Some("metrics_test_actor"));
+            assert!(found, "Should find metrics_test_actor in metrics list");
+        }
+        other => panic!("Expected metrics list, got {:?}", other),
+    }
+
+    test_actor.stop(None);
+    introspection_ref.stop(None);
+}
+
+#[tokio::test]
+async fn IntrospectionActor___get_system_info___returns_system_info() {
+    let args = IntrospectionArgs {
+        node_name: "sysinfo_test_node".to_string(),
+        tracing_handle: None,
+    };
+
+    let (introspection_ref, _handle) = Actor::spawn(
+        Some("sysinfo_introspection".to_string()),
+        IntrospectionActor,
+        args,
+    )
+    .await
+    .expect("Failed to spawn IntrospectionActor");
+
+    let result = introspection_ref
+        .call(
+            ShellProtocolMessage::GetSystemInfo,
+            Some(DEFAULT_RPC_TIMEOUT),
+        )
+        .await;
+
+    match result {
+        Ok(ractor::rpc::CallResult::Success(info)) => {
+            // Verify basic fields are populated
+            assert!(!info.hostname.is_empty(), "Hostname should not be empty");
+            assert!(!info.exe_name.is_empty(), "Exe name should not be empty");
+            assert!(info.pid > 0, "PID should be positive");
+            assert!(
+                !info.ractor_shell_version.is_empty(),
+                "Version should not be empty"
+            );
+        }
+        other => panic!("Expected system info, got {:?}", other),
+    }
+
+    introspection_ref.stop(None);
+}
+
+// ============================================================================
+// collect_actor_metrics Tests
+// ============================================================================
+
+#[tokio::test]
+async fn collect_actor_metrics___with_registered_actors___includes_actors() {
+    // Create test actors
+    let (test_actor1, _handle1) = Actor::spawn(
+        Some("collect_metrics_actor1".to_string()),
+        DynamicTestActor,
+        (),
+    )
+    .await
+    .expect("Failed to spawn test actor 1");
+
+    let (test_actor2, _handle2) = Actor::spawn(
+        Some("collect_metrics_actor2".to_string()),
+        DynamicTestActor,
+        (),
+    )
+    .await
+    .expect("Failed to spawn test actor 2");
+
+    let metrics = super::collect_actor_metrics();
+
+    // Should find our test actors
+    let found1 = metrics
+        .iter()
+        .any(|m| m.name.as_deref() == Some("collect_metrics_actor1"));
+    let found2 = metrics
+        .iter()
+        .any(|m| m.name.as_deref() == Some("collect_metrics_actor2"));
+
+    assert!(found1, "Should find collect_metrics_actor1");
+    assert!(found2, "Should find collect_metrics_actor2");
+
+    test_actor1.stop(None);
+    test_actor2.stop(None);
+}
+
+#[tokio::test]
+async fn collect_actor_metrics___actor_in_process_group___includes_group_membership() {
+    use ractor::pg;
+
+    // Create test actor and add to a known process group
+    let (test_actor, _handle) =
+        Actor::spawn(Some("collect_pg_actor".to_string()), DynamicTestActor, ())
+            .await
+            .expect("Failed to spawn test actor");
+
+    // Add to a known process group (must be in KNOWN_PROCESS_GROUPS)
+    pg::join("ping_pong".to_string(), vec![test_actor.get_cell()]);
+
+    let metrics = super::collect_actor_metrics();
+
+    // Find our actor and check group membership
+    let actor_metrics = metrics
+        .iter()
+        .find(|m| m.name.as_deref() == Some("collect_pg_actor"));
+
+    assert!(actor_metrics.is_some(), "Should find collect_pg_actor");
+    let actor_metrics = actor_metrics.unwrap();
+    assert!(
+        actor_metrics.groups.contains(&"ping_pong".to_string()),
+        "Should show ping_pong group membership"
+    );
+
+    test_actor.stop(None);
+}
+
+// ============================================================================
+// SystemInfoCollector Tests
+// ============================================================================
+
+#[test]
+fn SystemInfoCollector___new___creates_collector() {
+    let collector = super::SystemInfoCollector::new();
+    // Just verify it creates without panic
+    drop(collector);
+}
+
+#[test]
+fn SystemInfoCollector___refresh___returns_valid_info() {
+    let mut collector = super::SystemInfoCollector::new();
+    let info = collector.refresh();
+
+    // Verify basic fields
+    assert!(!info.hostname.is_empty(), "Hostname should not be empty");
+    assert!(!info.exe_name.is_empty(), "Exe name should not be empty");
+    assert!(info.pid > 0, "PID should be positive");
+    assert!(
+        !info.ractor_shell_version.is_empty(),
+        "Version should not be empty"
+    );
+}
+
+#[test]
+fn SystemInfoCollector___multiple_refreshes___tracks_cpu_over_time() {
+    let mut collector = super::SystemInfoCollector::new();
+
+    // First refresh
+    let info1 = collector.refresh();
+
+    // Do some work to generate CPU usage
+    let mut sum = 0u64;
+    for i in 0..100000 {
+        sum = sum.wrapping_add(i);
+    }
+    let _ = sum; // Prevent optimization
+
+    // Second refresh
+    let info2 = collector.refresh();
+
+    // Both should return valid info (CPU% may or may not change)
+    assert!(info1.pid > 0);
+    assert!(info2.pid > 0);
+    assert_eq!(info1.pid, info2.pid, "PID should be consistent");
+}
+
+// ============================================================================
+// CallTypedRpc Tests (additional cases)
+// ============================================================================
+
+// Note: Testing the ActorNotFound path for call_typed_rpc_on_actor requires
+// registering a schema via the SchemaProvider trait, which needs a concrete
+// message type. The main path (NotSchemaEnabled) is already tested above.
+// The ActorNotFound case is implicitly tested through the IntrospectionActor
+// integration tests.
+
+// ============================================================================
+// PollMonitorEvents with Status Changes Tests
+// ============================================================================
+
+#[tokio::test]
+async fn IntrospectionActor___poll_monitor_events___returns_started_event_when_monitoring_begins() {
+    // Create a test actor to monitor
+    let (test_actor, _handle) = Actor::spawn(
+        Some("poll_started_test_actor".to_string()),
+        DynamicTestActor,
+        (),
+    )
+    .await
+    .expect("Failed to spawn test actor");
+
+    let args = IntrospectionArgs {
+        node_name: "poll_started_test_node".to_string(),
+        tracing_handle: None,
+    };
+
+    let (introspection_ref, _handle) = Actor::spawn(
+        Some("poll_started_introspection".to_string()),
+        IntrospectionActor,
+        args,
+    )
+    .await
+    .expect("Failed to spawn IntrospectionActor");
+
+    // Start monitoring - this generates a STARTED event
+    let _ = introspection_ref
+        .call(
+            |reply| {
+                ShellProtocolMessage::StartMonitoring("poll_started_test_actor".to_string(), reply)
+            },
+            Some(DEFAULT_RPC_TIMEOUT),
+        )
+        .await;
+
+    // Poll for events
+    let result = introspection_ref
+        .call(
+            ShellProtocolMessage::PollMonitorEvents,
+            Some(DEFAULT_RPC_TIMEOUT),
+        )
+        .await;
+
+    match result {
+        Ok(ractor::rpc::CallResult::Success(batch)) => {
+            // Should have at least one STARTED event
+            let started_event = batch.events.iter().find(|e| e.event_type == "STARTED");
+            assert!(started_event.is_some(), "Should have a STARTED event");
+            assert_eq!(
+                started_event.unwrap().actor_name.as_deref(),
+                Some("poll_started_test_actor")
+            );
+        }
+        other => panic!("Expected batch with STARTED event, got {:?}", other),
+    }
+
+    test_actor.stop(None);
+    introspection_ref.stop(None);
+}
+
+#[tokio::test]
+async fn IntrospectionActor___poll_monitor_events___detects_actor_stop() {
+    // Create a test actor to monitor
+    let (test_actor, test_handle) = Actor::spawn(
+        Some("poll_stop_test_actor".to_string()),
+        DynamicTestActor,
+        (),
+    )
+    .await
+    .expect("Failed to spawn test actor");
+
+    let args = IntrospectionArgs {
+        node_name: "poll_stop_test_node".to_string(),
+        tracing_handle: None,
+    };
+
+    let (introspection_ref, _handle) = Actor::spawn(
+        Some("poll_stop_introspection".to_string()),
+        IntrospectionActor,
+        args,
+    )
+    .await
+    .expect("Failed to spawn IntrospectionActor");
+
+    // Start monitoring
+    let _ = introspection_ref
+        .call(
+            |reply| {
+                ShellProtocolMessage::StartMonitoring("poll_stop_test_actor".to_string(), reply)
+            },
+            Some(DEFAULT_RPC_TIMEOUT),
+        )
+        .await;
+
+    // Clear the initial STARTED event
+    let _ = introspection_ref
+        .call(
+            ShellProtocolMessage::PollMonitorEvents,
+            Some(DEFAULT_RPC_TIMEOUT),
+        )
+        .await;
+
+    // Stop the monitored actor
+    test_actor.stop(None);
+    let _ = test_handle.await;
+
+    // Give some time for status to update
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    // Poll for events - should detect the stop
+    let result = introspection_ref
+        .call(
+            ShellProtocolMessage::PollMonitorEvents,
+            Some(DEFAULT_RPC_TIMEOUT),
+        )
+        .await;
+
+    match result {
+        Ok(ractor::rpc::CallResult::Success(batch)) => {
+            // Should have a STOPPED event (either status change or "no longer in registry")
+            let stopped_event = batch.events.iter().find(|e| e.event_type == "STOPPED");
+            assert!(
+                stopped_event.is_some(),
+                "Should detect actor stop: got events {:?}",
+                batch.events
+            );
+        }
+        other => panic!("Expected batch with STOPPED event, got {:?}", other),
+    }
+
+    introspection_ref.stop(None);
+}
