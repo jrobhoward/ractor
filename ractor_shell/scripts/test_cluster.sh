@@ -7,6 +7,7 @@
 #
 # Usage:
 #   ./scripts/test_cluster.sh              # Start 3 nodes + shell (default)
+#   ./scripts/test_cluster.sh --release    # Start with optimized release build
 #   ./scripts/test_cluster.sh --nodes 5    # Start 5 nodes + shell
 #   ./scripts/test_cluster.sh --no-shell   # Start nodes only (for manual testing)
 #   ./scripts/test_cluster.sh --trace      # Enable trace-level logging
@@ -37,6 +38,7 @@ START_PORT=9001
 COOKIE="secret_cookie"
 START_SHELL=true
 LOG_LEVEL="info"  # info, debug, or trace
+RELEASE_MODE=false
 PIDS=()
 
 # Colors for output
@@ -58,6 +60,7 @@ print_usage() {
     echo "Usage: $0 [OPTIONS]"
     echo
     echo "Options:"
+    echo "  --release      Use optimized release build (faster, lower CPU usage)"
     echo "  --nodes N      Number of cluster nodes to start (default: 3)"
     echo "  --port PORT    Starting port number (default: 9001)"
     echo "  --cookie STR   Cluster authentication cookie (default: secret_cookie)"
@@ -67,7 +70,8 @@ print_usage() {
     echo "  --help         Show this help message"
     echo
     echo "Examples:"
-    echo "  $0                    # Start 3-node Raft cluster + shell"
+    echo "  $0                    # Start 3-node Raft cluster + shell (debug build)"
+    echo "  $0 --release          # Start with optimized release build"
     echo "  $0 --nodes 5          # Start 5-node cluster + shell"
     echo "  $0 --no-shell         # Start cluster only (for manual testing)"
     echo "  $0 --trace            # Start with verbose tracing to log files"
@@ -124,6 +128,10 @@ while [[ $# -gt 0 ]]; do
             START_SHELL=false
             shift
             ;;
+        --release)
+            RELEASE_MODE=true
+            shift
+            ;;
         --debug)
             LOG_LEVEL="debug"
             shift
@@ -156,9 +164,19 @@ trap cleanup EXIT INT TERM
 print_header
 
 # Build the project first
-echo -e "${YELLOW}Building ractor_shell...${NC}"
-cd "$REPO_ROOT"
-cargo build --example cluster_demo -p ractor_shell --quiet
+if [ "$RELEASE_MODE" = true ]; then
+    echo -e "${YELLOW}Building ractor_shell (release mode)...${NC}"
+    cd "$REPO_ROOT"
+    cargo build --example cluster_demo -p ractor_shell --release --quiet
+    CARGO_TARGET="target/release/examples/cluster_demo"
+    BUILD_TYPE="release"
+else
+    echo -e "${YELLOW}Building ractor_shell (debug mode)...${NC}"
+    cd "$REPO_ROOT"
+    cargo build --example cluster_demo -p ractor_shell --quiet
+    CARGO_TARGET="target/debug/examples/cluster_demo"
+    BUILD_TYPE="debug"
+fi
 echo -e "${GREEN}Build complete.${NC}"
 echo
 
@@ -203,7 +221,7 @@ NODE_ADDRS+=("127.0.0.1:$FIRST_PORT")
 echo -e "  Starting ${CYAN}$FIRST_NAME${NC} on port ${CYAN}$FIRST_PORT${NC} (seed node)..."
 
 LOG_FILE="/tmp/ractor_${FIRST_NAME}.log"
-cargo run --example cluster_demo -p ractor_shell --quiet -- node \
+"$REPO_ROOT/$CARGO_TARGET" node \
     --port "$FIRST_PORT" \
     --name "$FIRST_NAME" \
     --cookie "$COOKIE" \
@@ -234,7 +252,7 @@ for i in $(seq 2 $NUM_NODES); do
     echo -e "  Starting ${CYAN}$NODE_NAME${NC} on port ${CYAN}$PORT${NC} (connecting to $FIRST_NAME)..."
 
     LOG_FILE="/tmp/ractor_${NODE_NAME}.log"
-    cargo run --example cluster_demo -p ractor_shell --quiet -- node \
+    "$REPO_ROOT/$CARGO_TARGET" node \
         --port "$PORT" \
         --name "$NODE_NAME" \
         --cookie "$COOKIE" \
@@ -269,6 +287,12 @@ echo
 echo -e "${CYAN}────────────────────────────────────────────────────────────${NC}"
 echo -e "${CYAN}  ${BOLD}Cluster Information${NC}"
 echo -e "${CYAN}────────────────────────────────────────────────────────────${NC}"
+echo
+if [ "$RELEASE_MODE" = true ]; then
+    echo -e "  Build: ${GREEN}release${NC} (optimized)"
+else
+    echo -e "  Build: ${YELLOW}debug${NC} (use --release for lower CPU usage)"
+fi
 echo
 echo "  Nodes running:"
 for i in $(seq 1 $NUM_NODES); do
@@ -325,7 +349,7 @@ if [ "$START_SHELL" = true ]; then
     echo
 
     # Start the shell (this blocks until the user exits)
-    cargo run --example cluster_demo -p ractor_shell --quiet -- shell
+    "$REPO_ROOT/$CARGO_TARGET" shell
 else
     echo -e "${CYAN}────────────────────────────────────────────────────────────${NC}"
     echo -e "${CYAN}  ${BOLD}Manual Testing Mode${NC}"
@@ -333,11 +357,11 @@ else
     echo
     echo "  Start the shell manually with:"
     echo
-    echo -e "    ${GREEN}cargo run --example cluster_demo -p ractor_shell -- shell${NC}"
+    echo -e "    ${GREEN}$REPO_ROOT/$CARGO_TARGET shell${NC}"
     echo
     echo "  Or connect directly to a node:"
     echo
-    echo -e "    ${GREEN}cargo run --example cluster_demo -p ractor_shell -- shell --connect 127.0.0.1:$START_PORT${NC}"
+    echo -e "    ${GREEN}$REPO_ROOT/$CARGO_TARGET shell --connect 127.0.0.1:$START_PORT${NC}"
     echo
     echo "  Press Ctrl+C to stop all nodes."
     echo
