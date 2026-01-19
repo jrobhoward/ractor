@@ -139,23 +139,70 @@ impl ShellState {
         Ok(())
     }
 
-    /// Stop all tracing.
+    /// Stop all tracing (local and remote).
     pub(crate) async fn cmd_trace_off(&mut self) -> ShellResult<()> {
-        if let Some(handle) = &self.tracing_handle {
-            let was_active = handle.is_active();
-            handle.trace_off();
-            handle.clear_file_outputs();
+        let mut stopped_local = false;
 
-            if was_active {
-                println!("{} Tracing stopped", "✓".green());
-            } else {
-                println!("{}", "No active traces".bright_black());
+        // Stop local tracing
+        if let Some(handle) = &self.tracing_handle {
+            if handle.is_active() {
+                handle.trace_off();
+                handle.clear_file_outputs();
+                stopped_local = true;
             }
-        } else {
-            println!("{}", "Tracing not initialized".bright_black());
+        }
+
+        // Stop remote tracing
+        let stopped_remote = self.stop_remote_traces().await?;
+
+        // Report what was stopped
+        match (stopped_local, stopped_remote) {
+            (true, 0) => println!("{} Local tracing stopped", "✓".green()),
+            (false, n) if n > 0 => println!(
+                "{} Stopped {} remote trace subscription{}",
+                "✓".green(),
+                n,
+                if n == 1 { "" } else { "s" }
+            ),
+            (true, n) if n > 0 => println!(
+                "{} Stopped local tracing and {} remote subscription{}",
+                "✓".green(),
+                n,
+                if n == 1 { "" } else { "s" }
+            ),
+            (false, 0) => println!("{}", "No active traces".bright_black()),
+            _ => unreachable!(),
         }
 
         Ok(())
+    }
+
+    /// Stop all remote trace subscriptions, returning the count of subscriptions stopped.
+    async fn stop_remote_traces(&mut self) -> ShellResult<usize> {
+        let mut subscriptions = self.remote_trace_subscriptions.lock().await;
+
+        if subscriptions.is_empty() {
+            return Ok(0);
+        }
+
+        let count = subscriptions.len();
+
+        // Unsubscribe from each remote node
+        for sub in subscriptions.drain(..) {
+            if let Some(introspection_ref) = self.connected_nodes.get(&sub.node) {
+                let _ = introspection_ref
+                    .call(
+                        |reply| {
+                            ShellProtocolMessage::UnsubscribeFromTraces(sub.subscription_id, reply)
+                        },
+                        Some(DEFAULT_RPC_TIMEOUT),
+                    )
+                    .await;
+            }
+            // Poll task will be dropped and cancelled when subscription is dropped
+        }
+
+        Ok(count)
     }
 
     /// Get or set the minimum trace log level.
@@ -472,36 +519,18 @@ impl ShellState {
 
     /// Stop all remote tracing.
     pub(crate) async fn cmd_trace_remote_off(&mut self) -> ShellResult<()> {
-        let mut subscriptions = self.remote_trace_subscriptions.lock().await;
+        let count = self.stop_remote_traces().await?;
 
-        if subscriptions.is_empty() {
+        if count == 0 {
             println!("{}", "No active remote trace subscriptions".yellow());
-            return Ok(());
+        } else {
+            println!(
+                "{} Stopped {} remote trace subscription{}",
+                "✓".green(),
+                count,
+                if count == 1 { "" } else { "s" }
+            );
         }
-
-        let count = subscriptions.len();
-
-        // Unsubscribe from each remote node
-        for sub in subscriptions.drain(..) {
-            if let Some(introspection_ref) = self.connected_nodes.get(&sub.node) {
-                let _ = introspection_ref
-                    .call(
-                        |reply| {
-                            ShellProtocolMessage::UnsubscribeFromTraces(sub.subscription_id, reply)
-                        },
-                        Some(DEFAULT_RPC_TIMEOUT),
-                    )
-                    .await;
-            }
-            // Poll task will be dropped and cancelled when subscription is dropped
-        }
-
-        println!(
-            "{} Stopped {} remote trace subscription{}",
-            "✓".green(),
-            count,
-            if count == 1 { "" } else { "s" }
-        );
 
         Ok(())
     }

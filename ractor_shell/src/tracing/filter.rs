@@ -141,10 +141,10 @@ impl TraceFilter {
     }
 
     /// Clear all patterns (stop tracing).
+    /// Note: This preserves the min_level setting.
     pub fn clear(&mut self) {
         self.patterns.clear();
         self.trace_all = false;
-        self.min_level = MinLevel::default();
     }
 
     /// Check if any patterns are active.

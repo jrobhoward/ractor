@@ -6,39 +6,6 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Ractor is a pure-Rust actor framework inspired by Erlang's `gen_server`, providing lightweight actors with single-threaded message processing, supervision trees, and optional distributed clustering capabilities.
 
-## Working Conventions
-
-### Git Operations
-
-**The user is responsible for all git operations.** Do not commit, push, or perform other git operations unless explicitly asked. When changes are ready, inform the user and let them handle the commit.
-
-### ractor_shell Code Style
-
-For all files under `ractor_shell/`:
-
-- **Prefer `use` imports at the top of the file** rather than fully-qualified paths throughout
-- Group imports by: std, external crates, workspace crates (ractor, ractor_cluster), local modules
-- This improves readability and makes dependencies explicit
-
-```rust
-// Good - imports at top
-use ractor::ActorStatus;
-use ractor::registry;
-
-fn example() {
-    let names = registry::registered();
-    // ...
-}
-
-// Avoid - fully-qualified paths scattered throughout
-fn example() {
-    let names = ractor::registry::registered();
-    // ...
-}
-```
-
-See `ractor_shell/SKILLS.md` for additional ractor_shell-specific conventions.
-
 ## Workspace Structure
 
 This is a Cargo workspace with multiple crates:
@@ -48,41 +15,9 @@ This is a Cargo workspace with multiple crates:
 - **ractor_cluster_integration_tests**: Integration tests for clustering
 - **ractor_example_entry_proc**: Example entry point procedures
 - **ractor_playground**: Playground/experimentation crate
-- **ractor_shell**: Interactive REPL for debugging actor systems (NOT built by default)
 - **xtask**: Build/development automation tasks
 
 ## Build and Test Commands
-
-### Standard Build
-
-```bash
-# Build default workspace members (ractor, ractor_cluster, ractor_cluster_derive)
-cargo build
-
-# Build all workspace members including optional ones
-cargo build --workspace
-```
-
-### Building ractor_shell (Optional)
-
-The ractor_shell is an interactive REPL for debugging actor systems, inspired by Erlang's `erl` shell. It is **NOT** built by default.
-
-```bash
-# Build ractor_shell specifically
-cargo build -p ractor_shell
-
-# Run the shell demo
-cargo run --example demo -p ractor_shell
-
-# Run other shell examples
-cargo run --example dynamic_actor -p ractor_shell
-cargo run --example monitoring_demo -p ractor_shell
-
-# Install the shell binary
-cargo install --path ractor_shell
-```
-
-See `ractor_shell/README.md` for complete shell documentation.
 
 ### Running Tests
 
@@ -99,9 +34,6 @@ cargo test --package ractor --features cluster
 cargo test --package ractor --features async-std,message_span_propogation --no-default-features
 cargo test --package ractor --features monitors
 cargo test --package ractor --features blanket_serde
-cargo test --package ractor --features output-port-v2
-cargo test --package ractor --features async-trait
-cargo test --package ractor_shell
 
 # Run a specific test
 cargo test --package ractor --test <test_name>
@@ -340,97 +272,6 @@ Critical files for understanding the architecture:
 - `ractor/src/message.rs`: Message trait definition
 - `ractor_cluster/src/node/`: NodeServer and NodeSession implementations
 - `docs/runtime-semantics.md`: Detailed runtime guarantees and edge cases
-
-## ractor_shell - Interactive Debugging REPL
-
-The `ractor_shell` provides an Erlang-style interactive shell for debugging and observing Ractor actor systems. It offers capabilities similar to Erlang's Observer tool.
-
-### Key Features
-
-- **Actor Introspection**: List and inspect all actors (via registry and process groups)
-- **Remote Connections**: Connect to distributed ractor_cluster nodes
-- **Dynamic Messages**: Send arbitrary JSON messages to actors implementing `DynamicMessage`
-- **Monitoring**: Track actor lifecycle events (start, stop, panic, failure)
-- **Cluster Topology**: Visualize mesh topology and cross-cluster process groups
-- **Raft Leader Election**: Built-in Raft implementation for cluster demos
-- **Tab Completion**: Context-aware command and argument completion
-- **Command Aliases**: Short-form commands (e.g., `a` for `actors`, `r` for `registry`)
-
-### Usage
-
-```bash
-# Run the demo (spawns test actors and starts shell)
-cargo run --example demo -p ractor_shell
-
-# Run the Raft cluster demo (3-node cluster with leader election)
-./ractor_shell/scripts/test_cluster.sh
-
-# Available commands in shell
-ractor@local > help
-ractor@local > actors           # List all actors
-ractor@local > registry         # Show registered actors
-ractor@local > pg members <group>  # List process group members
-ractor@local > info <actor>     # Show actor details
-ractor@local > monitor <actor>  # Watch lifecycle events
-ractor@local > connect <host:port>  # Connect to remote node
-ractor@local > cluster          # Show cluster topology
-
-# Raft commands (after connecting to a cluster node)
-ractor@local > connect 127.0.0.1:9001
-ractor@127.0.0.1:9001 > call raft_node GetStatus {}
-ractor@127.0.0.1:9001 > call raft_node IsLeader {}
-```
-
-### Dynamic Message Interface
-
-Actors can opt-in to receive arbitrary JSON from the shell:
-
-```rust
-use ractor_shell::dynamic::DynamicMessage;
-
-impl Actor for MyActor {
-    type Msg = DynamicMessage;
-    // ... handle Cast(json), Call(json, reply), Ping(reply) variants
-}
-```
-
-From the shell:
-```bash
-ractor@local > send my_actor {"command": "increment"}
-ractor@local > call my_actor {"command": "get_value"}
-```
-
-### Examples
-
-- `demo`: Basic shell with simple actors
-- `dynamic_actor`: Shows DynamicMessage API for JSON messaging
-- `monitoring_demo`: Actor lifecycle monitoring features
-- `cluster_node`: Raft cluster node for distributed testing
-
-### Documentation
-
-- `ractor_shell/README.md`: Complete feature documentation and examples
-- `ractor_shell/ARCHITECTURE.md`: Internal architecture and design
-- `ractor_shell/DYNAMIC_MESSAGES.md`: Dynamic message interface guide
-- `ractor_shell/MONITORING.md`: Actor monitoring guide
-- `ractor_shell/UX_FEATURES.md`: Tab completion and aliases
-
-### Current Limitations
-
-- Only shows named/registered actors (not all actors in system)
-- No actor metrics (message count, precise uptime) - would require ractor core changes
-
-See `ractor_shell/README.md` for complete documentation.
-
-### Key Technical Notes
-
-- **Supervision tree APIs are available**: `ActorCell::get_children()` and `ActorCell::try_get_supervisor()` are public - no core changes needed to visualize supervision trees
-- **Raft implementation is example code**: Located in `ractor_shell/examples/cluster_demo/raft.rs`, not in the main library
-- **Current priorities**: See `TASKS.md` for the prioritized task list
-
-**Important**: When working on ractor_shell, follow the conventions in:
-- `ractor_shell/SKILLS.md` - Development best practices (error handling, git workflow, code organization)
-- `ractor_shell/TESTING.md` - Test naming convention: `subject___condition___expected_result`
 
 ## Additional Resources
 

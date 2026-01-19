@@ -351,14 +351,14 @@ fn tracing_handle_level_allowed___error_level___only_error() {
 }
 
 #[test]
-fn tracing_handle_trace_off___resets_min_level() {
+fn tracing_handle_trace_off___preserves_min_level() {
     let (_, handle) = ShellTracingLayer::new();
     handle.trace("*");
     handle.set_min_level(MinLevel::Error);
 
     handle.trace_off();
 
-    assert_eq!(handle.min_level(), MinLevel::Trace);
+    assert_eq!(handle.min_level(), MinLevel::Error);
 }
 
 // ==================== Event Sender Tests ====================
@@ -668,7 +668,7 @@ fn tracing_workflow___typical_usage___works_correctly() {
     handle.trace_off();
     assert!(!handle.is_active());
     assert!(handle.patterns().is_empty());
-    assert_eq!(handle.min_level(), MinLevel::Trace); // Reset
+    assert_eq!(handle.min_level(), MinLevel::Info); // Level preserved
 
     drop(layer);
 }

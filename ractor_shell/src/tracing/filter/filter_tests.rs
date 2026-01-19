@@ -276,14 +276,14 @@ fn filter_level_allowed___respects_min_level() {
 }
 
 #[test]
-fn filter_clear___resets_level_to_trace() {
+fn filter_clear___preserves_min_level() {
     let mut filter = TraceFilter::new();
     filter.set_min_level(MinLevel::Error);
     filter.add_pattern("*");
 
     filter.clear();
 
-    assert_eq!(filter.min_level(), MinLevel::Trace);
+    assert_eq!(filter.min_level(), MinLevel::Error);
 }
 
 // matches_any_field tests

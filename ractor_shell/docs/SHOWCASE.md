@@ -1,6 +1,7 @@
 # ractor_shell Feature Showcase
 
 This guide demonstrates key ractor_shell features using the Raft cluster demo.
+The Raft cluster itself isn't intended for production use, it's only here to serve as an example of how ractor_shell could be used.
 
 ## Prerequisites
 
@@ -247,23 +248,6 @@ ractor@127.0.0.1:9001 > info raft_node
 
 ---
 
-## 6.5. Remote Actor Dashboard (top)
-
-The `top` command works both locally and remotely. When connected to a remote node, it fetches and displays actors from that node.
-
-### Launch dashboard for current remote node:
-```
-ractor@127.0.0.1:9001 > top
-Launching actor dashboard for 127.0.0.1:9001... (press 'q' to exit)
-```
-
-The TUI will show:
-- Node name in header: "ractor top - 127.0.0.1:9001 (remote)"
-- All actors registered on that remote node
-- Real-time updates (fetched via RPC every second)
-
----
-
 ## 7. Enable Tracing for Raft Events
 
 **Important**: The Raft actors run in the cluster node processes, not the shell. Use `trace remote` to capture their events.
@@ -330,7 +314,7 @@ Monitored Actors on 127.0.0.1:9001:
 First, check which node is leader:
 ```
 ractor@127.0.0.1:9001 > call raft_node GetLeader {}
-"node_b"
+"node_c"
 ```
 
 Switch to the leader node (we connected to all nodes in step 2):
@@ -372,6 +356,12 @@ You should see trace events like:
 
 Note: Events appear as they're polled from the remote node. There may be a slight delay.
 
+### Stop tracing:
+```
+ractor@127.0.0.1:9003 > trace off
+✓ Stopped 5 remote trace subscriptions
+```
+
 ### Verify new leader:
 ```
 ractor@127.0.0.1:9003 > call raft_node GetLeader {}
@@ -380,58 +370,21 @@ ractor@127.0.0.1:9003 > call raft_node GetLeader {}
 
 ---
 
-## 10. Stop a Node and Observe Recovery
+## 10. Interactive TUI Dashboard
 
-### Option A: Stop via shell command
+The `top` command provides a real-time dashboard of actors. It works both locally and on remote nodes.
 
-First, verify connectivity to the node:
-```
-ractor@127.0.0.1:9001 > ping 127.0.0.1:9001
-Pong from 127.0.0.1:9001 in 2ms
-```
-
-Stop the raft_node actor (this will be restarted by its supervisor):
-```
-ractor@127.0.0.1:9001 > stop raft_node
-✓ Sent stop signal to 'raft_node' on 127.0.0.1:9001
-```
-
-**Note**: If you get "Failed to send message: SendErr", the cluster connection may have been dropped. Use `reconnect <node>` to refresh the connection, or try Option B.
-
-### Option B: Kill a node process (recommended)
-
-From another terminal:
-```bash
-# Find the node_a process
-ps aux | grep "node_a"
-
-# Kill it
-pkill -f "node_a"
-```
-
-### Observe in trace output:
-- Remaining nodes detect the failure
-- If the killed node was leader, a new election occurs
-- The cluster continues operating with 2 nodes
-
-### Check cluster health:
-```
-ractor@127.0.0.1:9002 > call raft_node GetPeers {}
-["node_c"]   # node_a is gone
-
-ractor@127.0.0.1:9002 > call raft_node GetStatus {}
-```
-
----
-
-## 11. Interactive TUI Dashboard
-
-### Launch the top-style dashboard:
+### Launch the dashboard:
 ```
 ractor@127.0.0.1:9001 > top
 ```
 
 ![top dashboard](images/top_screenshot.png)
+
+When connected to a remote node:
+- Header shows: "ractor top - 127.0.0.1:9001 (remote)"
+- Displays actors registered on that remote node
+- Real-time updates fetched via RPC every second
 
 **Navigation:**
 - `↑/↓` or `j/k` - Navigate actor list
@@ -445,7 +398,7 @@ ractor@127.0.0.1:9001 > top
 
 ---
 
-## 12. Save Traces to File
+## 11. Save Traces to File
 
 ### Write traces to a file:
 ```
@@ -460,7 +413,7 @@ cat /tmp/raft_trace.log
 
 ---
 
-## 13. Cleanup
+## 12. Cleanup
 
 ### Stop tracing:
 ```
@@ -476,10 +429,8 @@ ractor@127.0.0.1:9001 > unmonitor raft_node
 
 ### Disconnect:
 ```
-ractor@127.0.0.1:9001 > disconnect
+ractor@127.0.0.1:9001 > disconnect 127.0.0.1:9001
 ✓ Disconnected
-
-ractor@local >
 ```
 
 ### Exit the shell:
@@ -514,8 +465,8 @@ pkill -f cluster_demo
 | `trace <pattern>` | Start local tracing |
 | `trace remote <node> <pattern>` | Subscribe to remote traces |
 | `trace level <level>` | Set min trace level |
-| `trace off` | Stop local tracing |
-| `trace remote off` | Stop remote trace subscriptions |
+| `trace off` | Stop all tracing (local + remote) |
+| `trace remote off` | Stop only remote trace subscriptions |
 | `monitor <actor>` | Monitor lifecycle |
 | `monitors` | List monitored actors |
 | `top` / `t` | Interactive dashboard |
