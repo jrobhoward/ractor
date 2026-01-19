@@ -3634,20 +3634,34 @@ impl ShellCommand {
     /// Resolve command aliases
     fn resolve_alias(cmd: &str) -> &str {
         match cmd {
+            // Actor inspection
             "a" => "actors",
             "r" => "registry",
             "i" => "info",
-            "s" => "send",
-            "c" => "call",
-            "sf" => "send-file",
-            "l" => "load",
-            "q" => "quit",
-            "t" => "top",
-            "tr" => "trace",
-            "tf" => "trace-to-file",
             "sc" => "schema",
             "st" => "supervtree",
             "p" => "parent",
+            // Messaging
+            "s" => "send",
+            "c" => "call",
+            "sf" => "send-file",
+            // Connection & nodes
+            "con" => "connect",
+            "dis" => "disconnect",
+            "n" => "nodes",
+            "u" => "use",
+            "cl" => "cluster",
+            // Monitoring & tracing
+            "m" => "monitor",
+            "um" => "unmonitor",
+            "ms" => "monitors",
+            "t" => "top",
+            "tr" => "trace",
+            "tf" => "trace-to-file",
+            // Other
+            "h" => "help",
+            "l" => "load",
+            "q" => "quit",
             _ => cmd,
         }
     }

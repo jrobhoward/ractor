@@ -414,7 +414,7 @@ cat /tmp/raft_trace.log
 
 ### Stop tracing:
 ```
-ractor@127.0.0.1:9001 > trace-off
+ractor@127.0.0.1:9001 > trace off
 ✓ All tracing stopped
 ```
 

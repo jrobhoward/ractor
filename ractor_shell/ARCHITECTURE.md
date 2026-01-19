@@ -8,58 +8,31 @@ Ractor Shell is an interactive REPL for debugging and observing Ractor actor sys
 
 ## Component Architecture
 
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                              ractor_shell                                    │
-├─────────────────────────────────────────────────────────────────────────────┤
-│                                                                              │
-│  ┌──────────────┐    ┌─────────────────────────────────────────────────────┐│
-│  │   main.rs    │    │                    ShellState                       ││
-│  │  Entry Point │───▶│  - current_node: Option<String>                     ││
-│  │              │    │  - connected_nodes: HashMap<String, ActorRef>       ││
-│  └──────────────┘    │  - cluster_topology: Option<ClusterTopology>        ││
-│        │             │  - monitor_actor: Option<ActorRef>                  ││
-│        ▼             │  - node_server: Option<ActorRef>                    ││
-│  ┌──────────────┐    └─────────────────────────────────────────────────────┘│
-│  │  rustyline   │                    │                                      │
-│  │   Editor     │                    │ execute(cmd)                         │
-│  │              │                    ▼                                      │
-│  │ - History    │    ┌─────────────────────────────────────────────────────┐│
-│  │ - Completion │    │              Command Dispatcher                     ││
-│  │ - Hints      │    │                                                     ││
-│  └──────────────┘    │   cmd_actors() │ cmd_registry() │ cmd_info()       ││
-│        │             │   cmd_connect()│ cmd_cluster()  │ cmd_monitor()    ││
-│        │             │   cmd_send()   │ cmd_call()     │ cmd_stop()       ││
-│        ▼             └─────────────────────────────────────────────────────┘│
-│  ┌──────────────┐                    │                                      │
-│  │ ShellCommand │                    │ Local or Remote?                     │
-│  │  parse_line  │                    ▼                                      │
-│  └──────────────┘    ┌─────────────────────┬───────────────────────────────┐│
-│                      │    Local Path       │        Remote Path            ││
-│                      │                     │                               ││
-│                      │  ractor::registry   │    IntrospectionActor         ││
-│                      │  ractor::pg         │    (via RPC)                  ││
-│                      │                     │                               ││
-│                      └─────────────────────┴───────────────────────────────┘│
-│                                                                              │
-└─────────────────────────────────────────────────────────────────────────────┘
-                                      │
-                                      │ (remote connection)
-                                      ▼
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                           Remote Node                                        │
-├─────────────────────────────────────────────────────────────────────────────┤
-│                                                                              │
-│  ┌────────────────────────┐      ┌────────────────────────────────────────┐ │
-│  │   ractor_cluster       │      │        IntrospectionActor              │ │
-│  │   NodeSession          │◀────▶│                                        │ │
-│  │                        │      │  - Joins INTROSPECTION_GROUP           │ │
-│  │  - TCP Connection      │      │  - Responds to ShellProtocolMessage    │ │
-│  │  - Message Routing     │      │  - Queries local registry/pg           │ │
-│  │  - Authentication      │      │                                        │ │
-│  └────────────────────────┘      └────────────────────────────────────────┘ │
-│                                                                              │
-└─────────────────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+    subgraph shell["ractor_shell"]
+        main["main.rs<br/>Entry Point"]
+        state["ShellState<br/>- current_node<br/>- connected_nodes<br/>- cluster_topology<br/>- monitor_actor<br/>- node_server"]
+        editor["rustyline Editor<br/>- History<br/>- Completion<br/>- Hints"]
+        parser["ShellCommand<br/>parse_line"]
+        dispatcher["Command Dispatcher<br/>cmd_actors | cmd_registry | cmd_info<br/>cmd_connect | cmd_cluster | cmd_monitor<br/>cmd_send | cmd_call | cmd_stop"]
+
+        main --> state
+        main --> editor
+        editor --> parser
+        state -->|"execute(cmd)"| dispatcher
+
+        dispatcher --> local["Local Path<br/>ractor::registry<br/>ractor::pg"]
+        dispatcher --> remote["Remote Path<br/>IntrospectionActor<br/>(via RPC)"]
+    end
+
+    subgraph remotenode["Remote Node"]
+        session["ractor_cluster<br/>NodeSession<br/>- TCP Connection<br/>- Message Routing<br/>- Authentication"]
+        introspection["IntrospectionActor<br/>- Joins INTROSPECTION_GROUP<br/>- Responds to ShellProtocolMessage<br/>- Queries local registry/pg"]
+        session <--> introspection
+    end
+
+    remote -->|"remote connection"| session
 ```
 
 ## Key Components
@@ -118,36 +91,23 @@ pub enum ShellCommand {
 
 Actor that enables remote shells to query actor information:
 
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                        IntrospectionActor Flow                              │
-├─────────────────────────────────────────────────────────────────────────────┤
-│                                                                              │
-│  Shell                  Network                    Remote Node               │
-│    │                       │                            │                    │
-│    │  cmd: "actors"        │                            │                    │
-│    │───────────────────────│                            │                    │
-│    │                       │                            │                    │
-│    │  RPC: ListRegisteredActors                         │                    │
-│    │───────────────────────│──────────────────────────▶│                    │
-│    │                       │                            │                    │
-│    │                       │   IntrospectionActor       │                    │
-│    │                       │   receives message         │                    │
-│    │                       │            │               │                    │
-│    │                       │            ▼               │                    │
-│    │                       │   ractor::registry::       │                    │
-│    │                       │   registered()             │                    │
-│    │                       │            │               │                    │
-│    │                       │            ▼               │                    │
-│    │                       │   Build Vec<ActorInfo>     │                    │
-│    │                       │            │               │                    │
-│    │  Vec<ActorInfo>       │◀───────────│               │                    │
-│    │◀──────────────────────│                            │                    │
-│    │                       │                            │                    │
-│    ▼                       │                            │                    │
-│  Display table                                                               │
-│                                                                              │
-└─────────────────────────────────────────────────────────────────────────────┘
+```mermaid
+sequenceDiagram
+    participant Shell
+    participant Network
+    participant Remote as Remote Node
+    participant IA as IntrospectionActor
+    participant Registry as ractor::registry
+
+    Shell->>Network: cmd: "actors"
+    Network->>Remote: RPC: ListRegisteredActors
+    Remote->>IA: receives message
+    IA->>Registry: registered()
+    Registry-->>IA: Vec<String>
+    IA->>IA: Build Vec<ActorInfo>
+    IA-->>Network: Vec<ActorInfo>
+    Network-->>Shell: Vec<ActorInfo>
+    Shell->>Shell: Display table
 ```
 
 **Process Group Discovery:**
@@ -164,43 +124,24 @@ async fn pre_start(&self, myself: ActorRef<Self::Msg>, node_name: String) {
 
 Actor that tracks lifecycle events for monitored actors:
 
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                          MonitorActor Flow                                  │
-├─────────────────────────────────────────────────────────────────────────────┤
-│                                                                              │
-│  Shell                    MonitorActor              Ractor Runtime           │
-│    │                           │                          │                  │
-│    │  cmd: "monitor foo"       │                          │                  │
-│    │─────────────────────────▶│                          │                  │
-│    │                           │                          │                  │
-│    │                           │  Lookup "foo" in         │                  │
-│    │                           │  registry                │                  │
-│    │                           │─────────────────────────▶│                  │
-│    │                           │                          │                  │
-│    │                           │  ActorCell               │                  │
-│    │                           │◀─────────────────────────│                  │
-│    │                           │                          │                  │
-│    │                           │  Store in monitored map  │                  │
-│    │                           │  {name -> actor_id}      │                  │
-│    │                           │                          │                  │
-│    │  "✓ Monitoring foo"       │                          │                  │
-│    │◀─────────────────────────│                          │                  │
-│    │                           │                          │                  │
-│    │         ... later ...     │                          │                  │
-│    │                           │                          │                  │
-│    │                           │  SupervisionEvent::      │                  │
-│    │                           │  ActorTerminated(foo)    │                  │
-│    │                           │◀─────────────────────────│                  │
-│    │                           │                          │                  │
-│    │  Event formatted          │  Convert to MonitorEvent │                  │
-│    │  and displayed            │  if actor is monitored   │                  │
-│    │◀─────────────────────────│                          │                  │
-│    │                           │                          │                  │
-│    ▼                           │                          │                  │
-│  [14:24:12] ▼ STOPPED foo                                                    │
-│                                                                              │
-└─────────────────────────────────────────────────────────────────────────────┘
+```mermaid
+sequenceDiagram
+    participant Shell
+    participant Monitor as MonitorActor
+    participant Runtime as Ractor Runtime
+
+    Shell->>Monitor: cmd: "monitor foo"
+    Monitor->>Runtime: Lookup "foo" in registry
+    Runtime-->>Monitor: ActorCell
+    Monitor->>Monitor: Store in monitored map<br/>{name -> actor_id}
+    Monitor-->>Shell: "Monitoring foo"
+
+    Note over Shell,Runtime: ... later ...
+
+    Runtime->>Monitor: SupervisionEvent::<br/>ActorTerminated(foo)
+    Monitor->>Monitor: Convert to MonitorEvent<br/>if actor is monitored
+    Monitor-->>Shell: Event formatted<br/>and displayed
+    Shell->>Shell: [14:24:12] STOPPED foo
 ```
 
 **Event Types:**
@@ -236,30 +177,28 @@ if schema_registry::has_schema(&actor) {
 
 ### Local Command Execution
 
-```
-User Input → parse_line() → ShellCommand → execute() → cmd_*() → Output
-                                              │
-                                              ▼
-                                    ractor::registry::*
-                                    ractor::pg::*
+```mermaid
+flowchart LR
+    Input["User Input"] --> Parse["parse_line()"]
+    Parse --> Cmd["ShellCommand"]
+    Cmd --> Exec["execute()"]
+    Exec --> Handler["cmd_*()"]
+    Handler --> Registry["ractor::registry::*<br/>ractor::pg::*"]
+    Registry --> Output["Output"]
 ```
 
 ### Remote Command Execution
 
-```
-User Input → parse_line() → ShellCommand → execute() → cmd_*()
-                                              │
-                                              ▼
-                                    current_node == Some(node)
-                                              │
-                                              ▼
-                                    connected_nodes.get(node)
-                                              │
-                                              ▼
-                                    RPC call to IntrospectionActor
-                                              │
-                                              ▼
-                                    Output
+```mermaid
+flowchart LR
+    Input["User Input"] --> Parse["parse_line()"]
+    Parse --> Cmd["ShellCommand"]
+    Cmd --> Exec["execute()"]
+    Exec --> Handler["cmd_*()"]
+    Handler --> Check{"current_node<br/>== Some(node)?"}
+    Check -->|Yes| Lookup["connected_nodes.get(node)"]
+    Lookup --> RPC["RPC call to<br/>IntrospectionActor"]
+    RPC --> Output["Output"]
 ```
 
 ## State Management
@@ -325,28 +264,36 @@ if let Some(ref topology) = self.cluster_topology {
 
 ### Connection Sequence
 
-```
-1. User: connect 127.0.0.1:9002
+```mermaid
+sequenceDiagram
+    participant User
+    participant Shell
+    participant NodeServer as Local NodeServer
+    participant Remote as Remote NodeServer
+    participant IA as IntrospectionActor
 
-2. Shell checks if NodeServer exists
-   └─▶ If not: spawn local NodeServer on port 9100
+    User->>Shell: connect 127.0.0.1:9002
 
-3. Connect to remote NodeServer
-   └─▶ ractor_cluster establishes TCP connection
+    Shell->>Shell: Check if NodeServer exists
+    alt No NodeServer
+        Shell->>NodeServer: Spawn on port 9100
+    end
 
-4. Discover IntrospectionActor
-   └─▶ Query INTROSPECTION_GROUP process group
-   └─▶ Find actor on target node
+    Shell->>Remote: TCP connect
+    Remote-->>Shell: Connection established
 
-5. Send Ping to verify connection
-   └─▶ "pong from node_name"
+    Shell->>IA: Query INTROSPECTION_GROUP
+    IA-->>Shell: Actor found on target node
 
-6. Discover cluster topology (optional)
-   └─▶ GetClusterTopology RPC
+    Shell->>IA: Ping
+    IA-->>Shell: "pong from node_name"
 
-7. Store connection in connected_nodes map
+    Shell->>IA: GetClusterTopology (optional)
+    IA-->>Shell: ClusterTopology
 
-8. User can now: use 127.0.0.1:9002
+    Shell->>Shell: Store in connected_nodes
+
+    Shell-->>User: Now using 127.0.0.1:9002
 ```
 
 ### Protocol Messages

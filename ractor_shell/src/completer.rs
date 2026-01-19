@@ -80,20 +80,35 @@ impl ShellHelper {
     /// Get command aliases
     fn aliases() -> Vec<(&'static str, &'static str)> {
         vec![
+            // Actor inspection
             ("a", "actors"),
             ("r", "registry"),
             ("i", "info"),
+            ("sc", "schema"),
+            ("st", "supervtree"),
+            ("p", "parent"),
+            // Messaging
             ("s", "send"),
             ("c", "call"),
             ("sf", "send-file"),
-            ("l", "load"),
-            ("q", "quit"),
-            ("exit", "quit"),
+            // Connection & nodes
+            ("con", "connect"),
+            ("dis", "disconnect"),
+            ("n", "nodes"),
+            ("u", "use"),
+            ("cl", "cluster"),
+            // Monitoring & tracing
+            ("m", "monitor"),
+            ("um", "unmonitor"),
+            ("ms", "monitors"),
             ("t", "top"),
             ("tr", "trace"),
             ("tf", "trace-to-file"),
-            ("st", "supervtree"),
-            ("p", "parent"),
+            // Other
+            ("h", "help"),
+            ("l", "load"),
+            ("q", "quit"),
+            ("exit", "quit"),
         ]
     }
 

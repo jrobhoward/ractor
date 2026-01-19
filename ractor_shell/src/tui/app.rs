@@ -267,7 +267,7 @@ impl App {
                     // Convert RemoteActorMetrics to ActorMetrics
                     self.actors = remote_metrics
                         .into_iter()
-                        .map(|m| Self::convert_remote_metrics(m))
+                        .map(Self::convert_remote_metrics)
                         .collect();
                 }
                 Ok(CallResult::Timeout) => {

@@ -445,25 +445,22 @@ ractor@127.0.0.1:9001 > call raft_node GetStatus {}
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for detailed component diagrams and design decisions.
 
-```
-┌──────────────────────────────────────────────────────────────────┐
-│                         ractor_shell                              │
-├──────────────────────────────────────────────────────────────────┤
-│  ┌────────────┐      ┌─────────────────────────────────────────┐ │
-│  │   REPL     │      │             ShellState                  │ │
-│  │   Loop     │─────▶│  - current_node (local/remote context)  │ │
-│  │            │      │  - connected_nodes                      │ │
-│  │ rustyline  │      │  - cluster_topology (cached)            │ │
-│  └────────────┘      └─────────────────────────────────────────┘ │
-│        │                             │                           │
-│        ▼                             ▼                           │
-│  ┌────────────┐      ┌─────────────────────────────────────────┐ │
-│  │ShellCommand│      │         Command Dispatcher              │ │
-│  │ parse_line │      │  Local Path ──────── Remote Path        │ │
-│  │ + aliases  │      │  ractor::registry    RPC to remote      │ │
-│  └────────────┘      │  ractor::pg          IntrospectionActor │ │
-│                      └─────────────────────────────────────────┘ │
-└──────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+    subgraph shell["ractor_shell"]
+        repl["REPL Loop<br/>rustyline"]
+        state["ShellState<br/>- current_node (local/remote context)<br/>- connected_nodes<br/>- cluster_topology (cached)"]
+        parser["ShellCommand<br/>parse_line + aliases"]
+        dispatcher["Command Dispatcher"]
+        local["Local Path<br/>ractor::registry<br/>ractor::pg"]
+        remote["Remote Path<br/>RPC to remote<br/>IntrospectionActor"]
+
+        repl --> state
+        repl --> parser
+        state --> dispatcher
+        dispatcher --> local
+        dispatcher --> remote
+    end
 ```
 
 ## Documentation
