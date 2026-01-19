@@ -131,10 +131,16 @@ pub struct RaftStatus {
     pub term: u64,
     /// Current leader (if known)
     pub leader: Option<String>,
-    /// Number of known peers
-    pub peers: usize,
     /// Who this node voted for in the current term
     pub voted_for: Option<String>,
+    /// Names of known peers
+    pub peer_names: Vec<String>,
+    /// Election timer generation (increments on each election timeout reset)
+    pub election_generation: u64,
+    /// Milliseconds since last heartbeat received (None if never received or if leader)
+    pub ms_since_heartbeat: Option<u64>,
+    /// Number of votes received in current election (only relevant when Candidate)
+    pub votes_received: usize,
 }
 
 // ==================== Configuration ====================
@@ -215,6 +221,8 @@ pub struct RaftState {
     pub(crate) heartbeat_timer_generation: u64,
     /// Generation counter for peer discovery timers
     pub(crate) discovery_timer_generation: u64,
+    /// Timestamp of last heartbeat received (for followers)
+    pub(crate) last_heartbeat_received: Option<std::time::Instant>,
 }
 
 impl RaftState {
@@ -230,15 +238,12 @@ impl RaftState {
             election_timer_generation: 0,
             heartbeat_timer_generation: 0,
             discovery_timer_generation: 0,
+            last_heartbeat_received: None,
         }
     }
 
     pub fn is_leader(&self) -> bool {
         self.role == RaftRole::Leader
-    }
-
-    pub fn peer_count(&self) -> usize {
-        self.peers.len()
     }
 
     /// Calculate a randomized election timeout
@@ -274,13 +279,24 @@ impl RaftState {
 
     /// Build a RaftStatus for RPC responses
     pub fn get_status(&self) -> RaftStatus {
+        // Calculate ms since last heartbeat (only for followers)
+        let ms_since_heartbeat = if self.role == RaftRole::Leader {
+            None // Leaders don't receive heartbeats
+        } else {
+            self.last_heartbeat_received
+                .map(|t| t.elapsed().as_millis() as u64)
+        };
+
         RaftStatus {
             node_name: self.config.node_name.clone(),
             role: self.role.to_string(),
             term: self.current_term,
             leader: self.current_leader.clone(),
-            peers: self.peer_count(),
             voted_for: self.voted_for.clone(),
+            peer_names: self.peers.keys().cloned().collect(),
+            election_generation: self.election_timer_generation,
+            ms_since_heartbeat,
+            votes_received: self.votes_received.len(),
         }
     }
 }
@@ -852,6 +868,7 @@ impl RaftNode {
             state.role = RaftRole::Follower;
             state.current_leader = Some(leader_name);
             state.voted_for = None;
+            state.last_heartbeat_received = Some(std::time::Instant::now());
 
             // Reset election timeout since we heard from leader (with new generation)
             Self::schedule_election_timeout(&myself, state);

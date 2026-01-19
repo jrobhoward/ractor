@@ -91,9 +91,19 @@ ractor@127.0.0.1:9001 > call raft_node GetStatus {}
   "role": "Follower",
   "term": 3,
   "leader": "node_b",
-  "peer_count": 2
+  "voted_for": "node_b",
+  "peer_names": ["node_b", "node_c"],
+  "election_generation": 5,
+  "ms_since_heartbeat": 142,
+  "votes_received": 0
 }
 ```
+
+The enhanced status shows:
+- `peer_names`: List of known peer node names
+- `election_generation`: How many times the election timer has been reset
+- `ms_since_heartbeat`: Milliseconds since last heartbeat (followers only, null for leaders)
+- `votes_received`: Vote count during elections
 
 ### Check if this node is the leader:
 ```

@@ -79,10 +79,14 @@
   - File: `ractor_shell/examples/cluster_demo/raft.rs` (StepDown handler)
   - Note: No shell-specific `raft` command - uses generic `call` mechanism
 
-- [ ] **Add `raft status` command enhancements**
-  - Show current term, voted_for, election generation
-  - Show peer connection status (connected/disconnected)
-  - Show time since last heartbeat received
+- [x] **Add `raft status` command enhancements** ✅ COMPLETE
+  - Enhanced `RaftStatus` struct with new fields:
+    - `peer_names: Vec<String>` - names of known peers (not just count)
+    - `election_generation: u64` - election timer generation
+    - `ms_since_heartbeat: Option<u64>` - milliseconds since last heartbeat (followers only)
+    - `votes_received: usize` - vote count (useful when Candidate)
+  - Added `last_heartbeat_received: Option<Instant>` to `RaftState`
+  - Example: `call raft_node GetStatus {}` now shows full diagnostics
 
 - [x] **Investigate raft_node behavior on node failure** ✅ RESOLVED - NOT A BUG
   - **Original Observation**: When node_a was killed, local actors on node_c became unreachable
