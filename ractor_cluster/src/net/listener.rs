@@ -59,7 +59,10 @@ impl Actor for Listener {
         myself: ActorRef<Self::Msg>,
         node_server: Self::Arguments,
     ) -> Result<Self::State, ActorProcessingErr> {
-        let addr = format!("[::]:{}", self.port);
+        // Use 0.0.0.0 for IPv4 - this works reliably across platforms.
+        // Note: [::] would be IPv6, which on Windows doesn't accept IPv4 connections
+        // by default (unlike Linux which typically has dual-stack enabled).
+        let addr = format!("0.0.0.0:{}", self.port);
         let listener = match TcpListener::bind(&addr).await {
             Ok(l) => {
                 // If the used port differs from the user-specified port, inform the node server.

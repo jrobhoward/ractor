@@ -55,7 +55,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use colored::Colorize;
 use ractor::{Actor, ActorRef};
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
@@ -200,18 +199,19 @@ impl ShellState {
 
     /// Build the shell prompt string showing current node context.
     ///
-    /// Returns a colored prompt like `ractor@local > ` or `ractor@node_name > `.
+    /// Returns a prompt like `ractor@local > ` or `ractor@node_name > `.
+    ///
+    /// Note: Colors are disabled in the prompt because ANSI escape sequences
+    /// cause cursor positioning issues with rustyline on Windows terminals.
+    /// The \x01/\x02 markers that normally fix this don't work reliably
+    /// across all Windows terminal configurations.
     pub fn build_prompt(&self) -> String {
         let node_indicator = match &self.current_node {
             Some(node) => format!("@{}", node),
             None => "@local".to_string(),
         };
 
-        format!(
-            "{}{} > ",
-            "ractor".bright_cyan().bold(),
-            node_indicator.bright_yellow()
-        )
+        format!("ractor{} > ", node_indicator)
     }
 
     /// Execute a shell command.
