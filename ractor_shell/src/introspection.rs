@@ -32,7 +32,7 @@ use ractor::{pg, registry, Actor, ActorProcessingErr, ActorRef};
 use crate::dynamic::{supports_dynamic_messages, CallResponse, DynamicMessage};
 use crate::protocol::{
     ActorInfo, ActorLocation, ClusterTopology, DynamicCallResult, DynamicSendResult, NodeInfo,
-    RemoteActorMetrics, SerializableTraceEvent, ShellProtocolMessage, SubscriptionId,
+    RemoteActorMetrics, SerializableTraceEvent, ShellProtocolMessage, SubscriptionId, SystemInfo,
     TraceEventBatch, TypedRpcResult,
 };
 use crate::tracing::{TraceEvent, TraceEventType, TraceFilter, TracingHandle};
@@ -570,6 +570,11 @@ impl Actor for IntrospectionActor {
                 let metrics = collect_actor_metrics();
                 let _ = reply.send(metrics);
             }
+
+            ShellProtocolMessage::GetSystemInfo(reply) => {
+                let info = collect_system_info();
+                let _ = reply.send(info);
+            }
         }
 
         Ok(())
@@ -938,6 +943,93 @@ pub(crate) fn collect_actor_metrics() -> Vec<RemoteActorMetrics> {
     }
 
     all_actors
+}
+
+/// Collect system and process information for the `top` TUI header.
+///
+/// When the `sysinfo` feature is enabled, this returns real process stats.
+/// Otherwise, it returns a minimal struct with just hostname, exe name, and PID.
+#[cfg(feature = "sysinfo")]
+pub(crate) fn collect_system_info() -> SystemInfo {
+    use sysinfo::{MemoryRefreshKind, ProcessRefreshKind, RefreshKind, System};
+
+    // Create a System instance with minimal refresh (just what we need)
+    let mut sys = System::new_with_specifics(
+        RefreshKind::new()
+            .with_processes(ProcessRefreshKind::everything())
+            .with_memory(MemoryRefreshKind::everything()),
+    );
+
+    // Get current process info
+    let pid = std::process::id();
+    let sysinfo_pid = sysinfo::Pid::from_u32(pid);
+
+    // Refresh the specific process
+    sys.refresh_processes_specifics(
+        sysinfo::ProcessesToUpdate::Some(&[sysinfo_pid]),
+        true,
+        ProcessRefreshKind::everything(),
+    );
+
+    let (cpu_percent, memory_bytes, process_uptime_secs, thread_count) =
+        if let Some(process) = sys.process(sysinfo_pid) {
+            (
+                process.cpu_usage(),
+                process.memory(),
+                process.run_time(),
+                // sysinfo doesn't expose thread count directly on all platforms
+                // We'll use 0 as a placeholder if not available
+                0usize,
+            )
+        } else {
+            (0.0, 0, 0, 0)
+        };
+
+    // Get hostname
+    let hostname = System::host_name().unwrap_or_else(|| "unknown".to_string());
+
+    // Get executable name
+    let exe_name = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.file_name().map(|s| s.to_string_lossy().to_string()))
+        .unwrap_or_else(|| "unknown".to_string());
+
+    SystemInfo {
+        hostname,
+        exe_name,
+        pid,
+        cpu_percent,
+        memory_bytes,
+        process_uptime_secs,
+        thread_count,
+        total_memory_bytes: sys.total_memory(),
+        ractor_shell_version: env!("CARGO_PKG_VERSION").to_string(),
+    }
+}
+
+/// Fallback when sysinfo feature is disabled - returns minimal info
+#[cfg(not(feature = "sysinfo"))]
+pub(crate) fn collect_system_info() -> SystemInfo {
+    let hostname = hostname::get()
+        .map(|h| h.to_string_lossy().to_string())
+        .unwrap_or_else(|_| "unknown".to_string());
+
+    let exe_name = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.file_name().map(|s| s.to_string_lossy().to_string()))
+        .unwrap_or_else(|| "unknown".to_string());
+
+    SystemInfo {
+        hostname,
+        exe_name,
+        pid: std::process::id(),
+        cpu_percent: 0.0,
+        memory_bytes: 0,
+        process_uptime_secs: 0,
+        thread_count: 0,
+        total_memory_bytes: 0,
+        ractor_shell_version: env!("CARGO_PKG_VERSION").to_string(),
+    }
 }
 
 #[cfg(test)]

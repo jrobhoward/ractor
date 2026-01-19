@@ -13,7 +13,8 @@ use ratatui::{backend::CrosstermBackend, Terminal};
 use std::io;
 use std::time::{Duration, Instant};
 
-use crate::protocol::{RemoteActorMetrics, ShellProtocolMessage};
+use crate::introspection::collect_system_info;
+use crate::protocol::{RemoteActorMetrics, ShellProtocolMessage, SystemInfo};
 use crate::DEFAULT_RPC_TIMEOUT;
 
 /// Sort column for the actor table.
@@ -96,9 +97,9 @@ pub struct App {
     pub filter: String,
     /// Is filter input mode active?
     pub filter_mode: bool,
-    /// Refresh interval
+    /// Refresh interval for actor metrics
     pub refresh_interval: Duration,
-    /// Last refresh time
+    /// Last refresh time for actor metrics
     pub last_refresh: Instant,
     /// Show help overlay?
     pub show_help: bool,
@@ -106,6 +107,12 @@ pub struct App {
     pub remote_node: Option<(String, ActorRef<ShellProtocolMessage>)>,
     /// Last error message (for display)
     pub last_error: Option<String>,
+    /// Cached system info (refreshed less frequently)
+    pub system_info: Option<SystemInfo>,
+    /// Refresh interval for system info (less frequent than actor metrics)
+    pub sysinfo_refresh_interval: Duration,
+    /// Last system info refresh time
+    pub last_sysinfo_refresh: Instant,
 }
 
 impl Default for App {
@@ -131,6 +138,9 @@ impl App {
             show_help: false,
             remote_node: None,
             last_error: None,
+            system_info: None,
+            sysinfo_refresh_interval: Duration::from_secs(5),
+            last_sysinfo_refresh: Instant::now() - Duration::from_secs(10), // Force immediate refresh
         }
     }
 
@@ -153,6 +163,9 @@ impl App {
             show_help: false,
             remote_node: Some((node_name, introspection_ref)),
             last_error: None,
+            system_info: None,
+            sysinfo_refresh_interval: Duration::from_secs(5),
+            last_sysinfo_refresh: Instant::now() - Duration::from_secs(10), // Force immediate refresh
         }
     }
 
@@ -208,6 +221,11 @@ impl App {
             // Refresh metrics if needed
             if self.last_refresh.elapsed() >= self.refresh_interval {
                 self.refresh_metrics().await;
+            }
+
+            // Refresh system info less frequently
+            if self.last_sysinfo_refresh.elapsed() >= self.sysinfo_refresh_interval {
+                self.refresh_system_info().await;
             }
 
             // Draw UI
@@ -272,6 +290,44 @@ impl App {
         if !self.actors.is_empty() && self.selected >= self.actors.len() {
             self.selected = self.actors.len() - 1;
         }
+    }
+
+    /// Refresh system info (local or remote).
+    async fn refresh_system_info(&mut self) {
+        if let Some((ref node_name, ref introspection_ref)) = self.remote_node {
+            // Remote mode: fetch system info via RPC
+            match introspection_ref
+                .call(
+                    ShellProtocolMessage::GetSystemInfo,
+                    Some(DEFAULT_RPC_TIMEOUT),
+                )
+                .await
+            {
+                Ok(CallResult::Success(info)) => {
+                    self.system_info = Some(info);
+                }
+                Ok(CallResult::Timeout) => {
+                    // Don't overwrite last_error, keep actor metrics error if any
+                    if self.last_error.is_none() {
+                        self.last_error =
+                            Some(format!("Timeout fetching system info from {}", node_name));
+                    }
+                }
+                Ok(CallResult::SenderError) => {
+                    if self.last_error.is_none() {
+                        self.last_error = Some(format!("Connection lost to {}", node_name));
+                    }
+                }
+                Err(_) => {
+                    // Silently ignore - system info is optional
+                }
+            }
+        } else {
+            // Local mode: collect system info directly
+            self.system_info = Some(collect_system_info());
+        }
+
+        self.last_sysinfo_refresh = Instant::now();
     }
 
     /// Convert remote metrics to local ActorMetrics format.

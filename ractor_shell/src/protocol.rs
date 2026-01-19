@@ -155,6 +155,11 @@ pub enum ShellProtocolMessage {
     /// Get metrics for all actors on this node (for remote `top` command)
     #[rpc]
     GetActorMetrics(RpcReplyPort<Vec<RemoteActorMetrics>>),
+
+    // ==================== System Info (for remote `top` header) ====================
+    /// Get system/process info from this node (hostname, CPU, memory, etc.)
+    #[rpc]
+    GetSystemInfo(RpcReplyPort<SystemInfo>),
 }
 
 /// Result of a typed RPC call
@@ -361,6 +366,72 @@ pub struct RemoteActorMetrics {
     pub message_count: u64,
     /// Cumulative time spent in message handlers (nanoseconds)
     pub handle_time_ns: u64,
+}
+
+/// System and process information for remote transmission
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct SystemInfo {
+    /// Hostname of the machine
+    pub hostname: String,
+    /// Executable name (just the binary name, not full path)
+    pub exe_name: String,
+    /// Process ID
+    pub pid: u32,
+    /// Process CPU usage as percentage (0.0 - 100.0+)
+    pub cpu_percent: f32,
+    /// Process memory usage in bytes (RSS)
+    pub memory_bytes: u64,
+    /// Process uptime in seconds
+    pub process_uptime_secs: u64,
+    /// Number of threads in the process
+    pub thread_count: usize,
+    /// Total system memory in bytes (for context)
+    pub total_memory_bytes: u64,
+    /// ractor_shell version
+    pub ractor_shell_version: String,
+}
+
+impl SystemInfo {
+    /// Format memory as human-readable string (e.g., "45.2 MB")
+    pub fn memory_string(&self) -> String {
+        format_bytes(self.memory_bytes)
+    }
+
+    /// Format total system memory as human-readable string
+    pub fn total_memory_string(&self) -> String {
+        format_bytes(self.total_memory_bytes)
+    }
+
+    /// Format process uptime as human-readable string
+    pub fn uptime_string(&self) -> String {
+        let secs = self.process_uptime_secs;
+        if secs < 60 {
+            format!("{}s", secs)
+        } else if secs < 3600 {
+            format!("{}m {}s", secs / 60, secs % 60)
+        } else if secs < 86400 {
+            format!("{}h {}m", secs / 3600, (secs % 3600) / 60)
+        } else {
+            format!("{}d {}h", secs / 86400, (secs % 86400) / 3600)
+        }
+    }
+}
+
+/// Format bytes as human-readable string
+fn format_bytes(bytes: u64) -> String {
+    const KB: u64 = 1024;
+    const MB: u64 = KB * 1024;
+    const GB: u64 = MB * 1024;
+
+    if bytes >= GB {
+        format!("{:.1} GB", bytes as f64 / GB as f64)
+    } else if bytes >= MB {
+        format!("{:.1} MB", bytes as f64 / MB as f64)
+    } else if bytes >= KB {
+        format!("{:.1} KB", bytes as f64 / KB as f64)
+    } else {
+        format!("{} B", bytes)
+    }
 }
 
 #[cfg(test)]

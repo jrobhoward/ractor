@@ -4,7 +4,7 @@
 **Goal**: Rust-ractor counterpart for Erlang/OTP's shell & observer
 **Status**: Core features complete. Enhancements in progress.
 
-**Recent Completion**: Actor metrics added to ractor core (`get_message_count()`, `get_handle_time_ns()`) with Msg/s column in `top` TUI.
+**Recent Completion**: System info added to `top` TUI header (hostname, CPU%, memory, uptime) via optional `sysinfo` crate. Works locally and remotely.
 
 **Erlang/OTP Comparison**: See [Feature Comparison](#erlang-otp-feature-comparison) section.
 
@@ -387,6 +387,20 @@ These items need modifications to ractor core. Keep changes minimal.
   - File: `ractor_shell/src/protocol.rs`
   - File: `ractor_shell/src/introspection.rs`
 
+- [x] **Add system info to `top` TUI header** ✅ COMPLETE
+  - Added `sysinfo` as optional dependency (enabled by default)
+  - Added `SystemInfo` struct: hostname, exe_name, pid, cpu_percent, memory_bytes, process_uptime_secs, total_memory_bytes
+  - Added `GetSystemInfo` protocol message for remote system info
+  - Separate refresh interval (5s) to reduce overhead
+  - Works both locally and remotely
+  - Header now shows: `hostname  exe_name [pid]` on line 1, `CPU: X%  Mem: X MB / X GB  Uptime: Xh Xm` on line 2
+  - Graceful fallback when `sysinfo` feature disabled (shows hostname/exe/pid only)
+  - File: `ractor_shell/Cargo.toml` (feature flag)
+  - File: `ractor_shell/src/protocol.rs` (SystemInfo struct)
+  - File: `ractor_shell/src/introspection.rs` (collect_system_info)
+  - File: `ractor_shell/src/tui/app.rs` (caching, refresh)
+  - File: `ractor_shell/src/tui/ui.rs` (header rendering)
+
 ### Message Queue Depth API
 
 **Estimated Time**: 2-3 hours
@@ -421,7 +435,7 @@ These items need modifications to ractor core. Keep changes minimal.
 | Cluster topology | `cluster` commands | `nodes()`, observer | ✅ Implemented |
 | Monitoring | `monitor`/`unmonitor` | `erlang:monitor/2` | ✅ Implemented |
 | Message sending | `send`, `call` | Direct calls | ✅ DynamicMessage + typed schemas |
-| Top/Dashboard TUI | `top` | observer_cli | ✅ Phase 1 Complete |
+| Top/Dashboard TUI | `top` | observer_cli | ✅ Complete (with system info) |
 | Tracing | `trace`, `trace-to-file` | `dbg`, trace BIFs | ✅ Complete |
 | **Supervision trees** | `supervtree`, `parent` | Observer supervision view | ✅ **Complete** (local + remote) |
 | Message queue depth | - | `message_queue_len` | ❌ Needs core API |

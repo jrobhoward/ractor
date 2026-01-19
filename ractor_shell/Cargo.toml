@@ -9,6 +9,10 @@ repository = "https://github.com/slawlor/ractor"
 keywords = ["actor", "ractor", "shell", "repl", "debugging"]
 categories = ["command-line-utilities", "development-tools::debugging"]
 
+[features]
+default = ["sysinfo"]
+sysinfo = ["dep:sysinfo"]
+
 [[bin]]
 name = "ractor-shell"
 path = "src/main.rs"
@@ -38,6 +42,9 @@ terminal_size = "0.3"
 ratatui = "0.29"
 crossterm = "0.28"
 dashmap = "6"
+
+# System info (optional, for process stats in `top`)
+sysinfo = { version = "0.32", optional = true }
 
 # Tracing dependencies
 tracing = "0.1"

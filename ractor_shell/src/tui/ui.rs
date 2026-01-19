@@ -15,7 +15,7 @@ pub fn render(frame: &mut Frame, app: &App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3), // Header
+            Constraint::Length(4), // Header (increased for system info)
             Constraint::Min(5),    // Table
             Constraint::Length(3), // Status bar
         ])
@@ -37,8 +37,33 @@ pub fn render(frame: &mut Frame, app: &App) {
 
 /// Render the header bar.
 fn render_header(frame: &mut Frame, app: &App, area: Rect) {
-    // Build title based on local vs remote mode
-    let title = if let Some(node_name) = app.node_name() {
+    // Build title line with hostname and process info
+    let title = if let Some(ref sys) = app.system_info {
+        if let Some(node_name) = app.node_name() {
+            // Remote mode with system info
+            Line::from(vec![
+                Span::styled("ractor top", Style::default().fg(Color::Cyan).bold()),
+                Span::raw(" - "),
+                Span::styled(&sys.hostname, Style::default().fg(Color::Yellow).bold()),
+                Span::raw(" ("),
+                Span::styled(node_name, Style::default().fg(Color::Yellow)),
+                Span::raw(")  "),
+                Span::styled(&sys.exe_name, Style::default().fg(Color::White)),
+                Span::raw(format!(" [{}]", sys.pid)),
+            ])
+        } else {
+            // Local mode with system info
+            Line::from(vec![
+                Span::styled("ractor top", Style::default().fg(Color::Cyan).bold()),
+                Span::raw(" - "),
+                Span::styled(&sys.hostname, Style::default().fg(Color::Yellow).bold()),
+                Span::raw("  "),
+                Span::styled(&sys.exe_name, Style::default().fg(Color::White)),
+                Span::raw(format!(" [{}]", sys.pid)),
+            ])
+        }
+    } else if let Some(node_name) = app.node_name() {
+        // Remote mode without system info yet
         Line::from(vec![
             Span::styled("ractor top", Style::default().fg(Color::Cyan).bold()),
             Span::raw(" - "),
@@ -46,10 +71,29 @@ fn render_header(frame: &mut Frame, app: &App, area: Rect) {
             Span::styled(" (remote)", Style::default().fg(Color::Yellow)),
         ])
     } else {
+        // Local mode without system info yet
         Line::from(vec![
             Span::styled("ractor top", Style::default().fg(Color::Cyan).bold()),
             Span::raw(" - Actor Dashboard"),
         ])
+    };
+
+    // Build system stats line (CPU, memory, uptime)
+    let sys_stats = if let Some(ref sys) = app.system_info {
+        Line::from(vec![
+            Span::raw("  CPU: "),
+            Span::styled(
+                format!("{:.1}%", sys.cpu_percent),
+                Style::default().fg(Color::Cyan),
+            ),
+            Span::raw("  Mem: "),
+            Span::styled(sys.memory_string(), Style::default().fg(Color::Cyan)),
+            Span::raw(format!(" / {}", sys.total_memory_string())),
+            Span::raw("  Uptime: "),
+            Span::styled(sys.uptime_string(), Style::default().fg(Color::Cyan)),
+        ])
+    } else {
+        Line::from(vec![Span::raw("  Loading system info...")])
     };
 
     // Count actors from the cached list (works for both local and remote)
@@ -65,7 +109,7 @@ fn render_header(frame: &mut Frame, app: &App, area: Rect) {
         .filter(|a| a.status == ActorStatus::Stopped)
         .count();
 
-    let stats = if let Some(ref error) = app.last_error {
+    let actor_stats = if let Some(ref error) = app.last_error {
         // Show error instead of stats
         Line::from(vec![
             Span::styled("  Error: ", Style::default().fg(Color::Red).bold()),
@@ -86,8 +130,8 @@ fn render_header(frame: &mut Frame, app: &App, area: Rect) {
         ])
     };
 
-    let header =
-        Paragraph::new(vec![title, stats]).block(Block::default().borders(Borders::BOTTOM));
+    let header = Paragraph::new(vec![title, sys_stats, actor_stats])
+        .block(Block::default().borders(Borders::BOTTOM));
 
     frame.render_widget(header, area);
 }
