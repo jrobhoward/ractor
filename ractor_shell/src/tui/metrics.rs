@@ -29,8 +29,12 @@ pub struct ActorMetrics {
     pub groups: Vec<String>,
     /// When we first observed this actor
     pub first_seen: Instant,
+    /// Cached uptime in seconds (snapshot at refresh time for stable display)
+    pub uptime_secs: f64,
     /// Approximate message count (from tracing spans)
     pub message_count: u64,
+    /// Cumulative time spent in message handlers (nanoseconds)
+    pub handle_time_ns: u64,
 }
 
 impl ActorMetrics {
@@ -50,6 +54,28 @@ impl ActorMetrics {
             format!("{}m {}s", secs / 60, secs % 60)
         } else {
             format!("{}h {}m", secs / 3600, (secs % 3600) / 60)
+        }
+    }
+
+    /// Calculate message rate (messages per second).
+    /// Uses cached uptime_secs for stable display between refreshes.
+    pub fn msg_rate(&self) -> f64 {
+        if self.uptime_secs > 0.0 {
+            self.message_count as f64 / self.uptime_secs
+        } else {
+            0.0
+        }
+    }
+
+    /// Format message rate as human-readable string.
+    pub fn msg_rate_string(&self) -> String {
+        let rate = self.msg_rate();
+        if rate >= 1000.0 {
+            format!("{:.1}k/s", rate / 1000.0)
+        } else if rate >= 1.0 {
+            format!("{:.1}/s", rate)
+        } else {
+            "0/s".to_string()
         }
     }
 }
@@ -161,11 +187,15 @@ impl ActorMetricsCollector {
             .iter()
             .map(|entry| {
                 let id = entry.key().clone();
-                let msg_count = self
-                    .message_counts
-                    .get(&id)
-                    .map(|c| c.load(Ordering::Relaxed))
-                    .unwrap_or(0);
+
+                // Try to get metrics from ActorCell if available
+                let (message_count, handle_time_ns) = if let Some(name) = &entry.value().name {
+                    registry::where_is(name.clone())
+                        .map(|cell| (cell.get_message_count(), cell.get_handle_time_ns()))
+                        .unwrap_or((0, 0))
+                } else {
+                    (0, 0)
+                };
 
                 ActorMetrics {
                     id,
@@ -173,7 +203,9 @@ impl ActorMetricsCollector {
                     status: entry.value().status,
                     groups: entry.value().groups.clone(),
                     first_seen: entry.value().first_seen,
-                    message_count: msg_count,
+                    uptime_secs: entry.value().first_seen.elapsed().as_secs_f64(),
+                    message_count,
+                    handle_time_ns,
                 }
             })
             .collect()
@@ -244,7 +276,9 @@ mod tests {
             status: ActorStatus::Running,
             groups: vec![],
             first_seen: Instant::now() - std::time::Duration::from_secs(125),
+            uptime_secs: 125.0,
             message_count: 0,
+            handle_time_ns: 0,
         };
 
         let uptime = metrics.uptime_string();

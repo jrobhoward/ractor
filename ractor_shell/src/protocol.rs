@@ -357,8 +357,10 @@ pub struct RemoteActorMetrics {
     pub groups: Vec<String>,
     /// Uptime in milliseconds (time since first observed)
     pub uptime_ms: u64,
-    /// Approximate message count (from tracing spans)
+    /// Approximate message count (from ractor core metrics)
     pub message_count: u64,
+    /// Cumulative time spent in message handlers (nanoseconds)
+    pub handle_time_ns: u64,
 }
 
 #[cfg(test)]

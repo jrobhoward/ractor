@@ -24,6 +24,7 @@ pub enum SortColumn {
     Id,
     Status,
     Uptime,
+    MsgRate,
     Groups,
 }
 
@@ -34,7 +35,8 @@ impl SortColumn {
             Self::Name => Self::Id,
             Self::Id => Self::Status,
             Self::Status => Self::Uptime,
-            Self::Uptime => Self::Groups,
+            Self::Uptime => Self::MsgRate,
+            Self::MsgRate => Self::Groups,
             Self::Groups => Self::Name,
         }
     }
@@ -46,6 +48,7 @@ impl SortColumn {
             Self::Id => "ID",
             Self::Status => "Status",
             Self::Uptime => "Uptime",
+            Self::MsgRate => "Msg/s",
             Self::Groups => "Groups",
         }
     }
@@ -293,7 +296,9 @@ impl App {
             groups: remote.groups,
             // Convert uptime_ms back to first_seen (approximate)
             first_seen: Instant::now() - Duration::from_millis(remote.uptime_ms),
+            uptime_secs: remote.uptime_ms as f64 / 1000.0,
             message_count: remote.message_count,
+            handle_time_ns: remote.handle_time_ns,
         }
     }
 
@@ -311,6 +316,10 @@ impl App {
                 SortColumn::Id => a.id.cmp(&b.id),
                 SortColumn::Status => format!("{:?}", a.status).cmp(&format!("{:?}", b.status)),
                 SortColumn::Uptime => a.first_seen.cmp(&b.first_seen),
+                SortColumn::MsgRate => a
+                    .msg_rate()
+                    .partial_cmp(&b.msg_rate())
+                    .unwrap_or(std::cmp::Ordering::Equal),
                 SortColumn::Groups => a.groups.len().cmp(&b.groups.len()),
             };
 

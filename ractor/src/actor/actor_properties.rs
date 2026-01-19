@@ -3,8 +3,8 @@
 // This source code is licensed under both the MIT license found in the
 // LICENSE-MIT file in the root directory of this source tree.
 
-use std::sync::atomic::AtomicU8;
 use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicU64, AtomicU8};
 use std::sync::Mutex;
 
 use crate::actor::messages::StopMessage;
@@ -44,6 +44,8 @@ pub(crate) struct ActorProperties {
     pub(crate) supervision: InputPort<SupervisionEvent>,
     pub(crate) message: InputPort<MuxedMessage>,
     pub(crate) tree: SupervisionTree,
+    pub(crate) message_count: AtomicU64,
+    pub(crate) handle_time_ns: AtomicU64,
     pub(crate) type_id: std::any::TypeId,
     #[cfg(feature = "cluster")]
     pub(crate) supports_remoting: bool,
@@ -93,6 +95,8 @@ impl ActorProperties {
                 supervision: tx_supervision,
                 message: tx_message,
                 tree: SupervisionTree::default(),
+                message_count: AtomicU64::new(0),
+                handle_time_ns: AtomicU64::new(0),
                 type_id: std::any::TypeId::of::<TActor::Msg>(),
                 #[cfg(feature = "cluster")]
                 supports_remoting: TActor::Msg::serializable(),

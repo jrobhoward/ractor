@@ -4,7 +4,7 @@
 **Goal**: Rust-ractor counterpart for Erlang/OTP's shell & observer
 **Status**: Core features complete. Enhancements in progress.
 
-**Recent Completion**: Remote `stop`, `pg list`, and `tree` commands now work! All process group operations are now remote-capable.
+**Recent Completion**: Actor metrics added to ractor core (`get_message_count()`, `get_handle_time_ns()`) with Msg/s column in `top` TUI.
 
 **Erlang/OTP Comparison**: See [Feature Comparison](#erlang-otp-feature-comparison) section.
 
@@ -349,7 +349,7 @@
 
 These items need modifications to ractor core. Keep changes minimal.
 
-### Actor Metrics API (Enables enhanced `top`)
+### Actor Metrics API (Enables enhanced `top`) ✅ COMPLETE
 
 **Estimated Time**: 2-3 hours for core changes + 1-2 hours shell integration
 **Value**: MEDIUM-HIGH
@@ -359,10 +359,33 @@ These items need modifications to ractor core. Keep changes minimal.
   - Enables precise uptime calculation
   - Small change: add field to `ActorCellInner`, expose via public method
 
-- [ ] **Add `get_message_count()` to ActorCell** (optional)
-  - Counter incremented on each message processed
-  - Enables "reductions" equivalent
-  - More invasive: requires changes to message handling
+- [x] **Add `get_message_count()` to ActorCell** ✅ COMPLETE
+  - Added `message_count: AtomicU64` to `ActorProperties`
+  - Incremented on each message processed in actor loop
+  - Public getter `ActorCell::get_message_count()` exposed
+  - Works for both regular and thread-local actors
+  - File: `ractor/src/actor/actor_properties.rs`
+  - File: `ractor/src/actor/actor_cell.rs`
+  - File: `ractor/src/actor.rs` (instrumentation)
+  - File: `ractor/src/thread_local/inner.rs` (instrumentation)
+
+- [x] **Add `get_handle_time_ns()` to ActorCell** ✅ COMPLETE
+  - Added `handle_time_ns: AtomicU64` to `ActorProperties`
+  - Accumulates nanoseconds spent in message handlers
+  - Public getter `ActorCell::get_handle_time_ns()` exposed
+  - Enables future "handler latency" metrics
+
+- [x] **Add Msg/s column to `top` TUI** ✅ COMPLETE
+  - Added `handle_time_ns` and `uptime_secs` fields to `ActorMetrics`
+  - Added `msg_rate()` and `msg_rate_string()` helper methods
+  - Added `MsgRate` to `SortColumn` enum (sortable with 's' key)
+  - Updated `RemoteActorMetrics` protocol for remote `top`
+  - Uptime cached at refresh time for stable rate display
+  - File: `ractor_shell/src/tui/metrics.rs`
+  - File: `ractor_shell/src/tui/app.rs`
+  - File: `ractor_shell/src/tui/ui.rs`
+  - File: `ractor_shell/src/protocol.rs`
+  - File: `ractor_shell/src/introspection.rs`
 
 ### Message Queue Depth API
 
@@ -404,7 +427,8 @@ These items need modifications to ractor core. Keep changes minimal.
 | Message queue depth | - | `message_queue_len` | ❌ Needs core API |
 | Link inspection | `links` | `links`, `monitors` | ⏳ **Priority 8** |
 | Live refresh (simple) | `watch` | - | ⏳ Priority 5 |
-| Memory/reductions | - | `memory`, `reductions` | ❌ Needs core API |
+| Memory usage | - | `memory` | ❌ Needs core API |
+| Message count/rate | `top` Msg/s column | `reductions` | ✅ **Complete** (core + shell) |
 
 ---
 

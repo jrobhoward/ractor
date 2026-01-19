@@ -899,15 +899,26 @@ where
                     }
                 }
                 actor_cell::ActorPortMessage::Message(MuxedMessage::Message(msg)) => {
+                    let start = std::time::Instant::now();
                     let future = Self::handle_message(myself.clone(), state, handler, msg);
-                    match ports.run_with_signal(future).await {
+                    let result = match ports.run_with_signal(future).await {
                         Ok(Ok(())) => Ok(ActorLoopResult::ok()),
                         Ok(Err(internal_err)) => Err(internal_err),
                         Err(signal) => Ok(ActorLoopResult::signal(Self::handle_signal(
                             myself.clone(),
                             signal,
                         ))),
-                    }
+                    };
+                    myself
+                        .inner
+                        .inner
+                        .message_count
+                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    myself.inner.inner.handle_time_ns.fetch_add(
+                        start.elapsed().as_nanos() as u64,
+                        std::sync::atomic::Ordering::Relaxed,
+                    );
+                    result
                 }
                 actor_cell::ActorPortMessage::Message(MuxedMessage::Drain) => {
                     // Drain is a stub marker that the actor should now stop, we've processed

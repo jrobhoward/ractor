@@ -906,7 +906,8 @@ pub(crate) fn collect_actor_metrics() -> Vec<RemoteActorMetrics> {
                     status: format!("{:?}", cell.get_status()),
                     groups,
                     uptime_ms: start_time.elapsed().as_millis() as u64,
-                    message_count: 0, // We don't have access to tracing message counts here
+                    message_count: cell.get_message_count(),
+                    handle_time_ns: cell.get_handle_time_ns(),
                 });
             }
         }
@@ -929,7 +930,8 @@ pub(crate) fn collect_actor_metrics() -> Vec<RemoteActorMetrics> {
                     status: format!("{:?}", cell.get_status()),
                     groups,
                     uptime_ms: start_time.elapsed().as_millis() as u64,
-                    message_count: 0,
+                    message_count: cell.get_message_count(),
+                    handle_time_ns: cell.get_handle_time_ns(),
                 });
             }
         }

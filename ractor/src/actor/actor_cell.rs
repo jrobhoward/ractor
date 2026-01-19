@@ -314,6 +314,20 @@ impl ActorCell {
         self.inner.get_status()
     }
 
+    /// Retrieve the total number of messages processed by this actor.
+    pub fn get_message_count(&self) -> u64 {
+        self.inner
+            .message_count
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Retrieve cumulative time spent in message handlers (nanoseconds).
+    pub fn get_handle_time_ns(&self) -> u64 {
+        self.inner
+            .handle_time_ns
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
     /// Identifies if this actor supports remote (dist) communication
     ///
     /// Returns [true] if the actor's messaging protocols support remote calls, [false] otherwise

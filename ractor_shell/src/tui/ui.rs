@@ -100,6 +100,7 @@ fn render_table(frame: &mut Frame, app: &App, area: Rect) {
         ("Name", SortColumn::Name),
         ("Status", SortColumn::Status),
         ("Uptime", SortColumn::Uptime),
+        ("Msg/s", SortColumn::MsgRate),
         ("Groups", SortColumn::Groups),
     ]
     .iter()
@@ -139,6 +140,7 @@ fn render_table(frame: &mut Frame, app: &App, area: Rect) {
                 Cell::from(actor.name.clone().unwrap_or_else(|| "-".to_string())),
                 Cell::from(format!("{:?}", actor.status)).style(status_style),
                 Cell::from(actor.uptime_string()),
+                Cell::from(actor.msg_rate_string()),
                 Cell::from(groups_str),
             ];
 
@@ -158,6 +160,7 @@ fn render_table(frame: &mut Frame, app: &App, area: Rect) {
         Constraint::Min(20),    // Name
         Constraint::Length(12), // Status
         Constraint::Length(10), // Uptime
+        Constraint::Length(10), // Msg/s
         Constraint::Min(20),    // Groups
     ];
 
