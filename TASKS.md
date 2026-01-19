@@ -4,7 +4,7 @@
 **Goal**: Rust-ractor counterpart for Erlang/OTP's shell & observer
 **Status**: Core features complete. Enhancements in progress.
 
-**Recent Completion**: System info added to `top` TUI header (hostname, CPU%, memory, uptime) via optional `sysinfo` crate. Works locally and remotely.
+**Recent Completion**: Fixed CPU% display in `top` TUI - was showing 0% due to sysinfo API quirk (`ProcessesToUpdate::Some` doesn't track CPU timing). Now uses `SystemInfoCollector` with `ProcessesToUpdate::All`.
 
 **Erlang/OTP Comparison**: See [Feature Comparison](#erlang-otp-feature-comparison) section.
 
@@ -31,11 +31,6 @@
         ├── sub_worker_1 (0.5) [Running]
         └── sub_worker_2 (0.6) [Running]
     ```
-
-- [ ] **Add supervision tree panel to `top` TUI**
-  - New panel showing tree structure
-  - Tab key to switch between actors list and tree view
-  - Highlight selected actor's position in tree
 
 - [x] **Add `parent <actor>` command**
   - Show the supervisor of a given actor
@@ -211,23 +206,7 @@
 
 ---
 
-## Priority 5: Simple Watch Mode
-
-**Estimated Time**: 2-3 hours
-**Value**: MEDIUM - Lightweight alternative to full TUI
-**Core Changes**: None
-
-- [ ] **Add `watch` command with auto-refresh**
-  - `watch actors` - refresh actor list every N seconds
-  - `watch stats` - continuous system stats
-  - `watch pg <group>` - monitor process group membership
-  - `watch tree` - monitor supervision tree changes
-  - Configurable refresh interval (default 2s)
-  - Press 'q' or Ctrl+C to exit watch mode
-
----
-
-## Priority 6: Network/Cluster Diagnostics
+## Priority 5: Network/Cluster Diagnostics
 
 **Estimated Time**: 3-4 hours
 **Value**: MEDIUM - Important for distributed debugging
@@ -261,7 +240,7 @@
 
 ---
 
-## Priority 7: Code Cleanup
+## Priority 6: Code Cleanup
 
 **Estimated Time**: 1.5 hours
 **Value**: LOW - Consistency with SKILLS.md
@@ -277,29 +256,7 @@
 
 ---
 
-## Priority 8: Enhanced Actor Inspection
-
-**Estimated Time**: 2-3 hours
-**Value**: LOW-MEDIUM
-**Core Changes**: None
-
-- [ ] **Add `whereis <name>` command (Erlang-style)**
-  - Quick lookup of registered name to actor ID
-  - Erlang equivalent: `whereis/1`
-
-- [ ] **Add `links <actor>` command** (OPTIONAL - mostly covered by `supervtree` and `parent`)
-  - Show supervisor and children for an actor in one view
-  - Combines functionality from `parent` and `info` commands
-  - Uses already-public `get_children()` and `try_get_supervisor()`
-
-- [ ] **Clarify `tree` vs `supervtree` naming**
-  - `tree` shows process groups
-  - `supervtree` shows supervision hierarchy
-  - Update documentation to explain difference
-
----
-
-## Priority 9: Shell UX Improvements
+## Priority 7: Shell UX Improvements
 
 **Estimated Time**: 2-3 hours
 **Value**: LOW
@@ -311,7 +268,7 @@
 
 ---
 
-## Priority 10: Schema-Based Generic RPC Dispatch ✅ COMPLETE
+## Priority 8: Schema-Based Generic RPC Dispatch ✅ COMPLETE
 
 **Estimated Time**: Unknown - Research required
 **Value**: LOW (workarounds exist)
@@ -395,9 +352,13 @@ These items need modifications to ractor core. Keep changes minimal.
   - Works both locally and remotely
   - Header now shows: `hostname  exe_name [pid]` on line 1, `CPU: X%  Mem: X MB / X GB  Uptime: Xh Xm` on line 2
   - Graceful fallback when `sysinfo` feature disabled (shows hostname/exe/pid only)
+  - **CPU% fix**: Created `SystemInfoCollector` that caches `sysinfo::System` instance
+    - sysinfo requires two measurements to calculate CPU delta
+    - Must use `ProcessesToUpdate::All` (not `Some`) for CPU% to work correctly in sysinfo 0.32
+    - First refresh returns 0% (no baseline), subsequent refreshes show accurate values
   - File: `ractor_shell/Cargo.toml` (feature flag)
   - File: `ractor_shell/src/protocol.rs` (SystemInfo struct)
-  - File: `ractor_shell/src/introspection.rs` (collect_system_info)
+  - File: `ractor_shell/src/introspection.rs` (SystemInfoCollector)
   - File: `ractor_shell/src/tui/app.rs` (caching, refresh)
   - File: `ractor_shell/src/tui/ui.rs` (header rendering)
 
@@ -439,10 +400,36 @@ These items need modifications to ractor core. Keep changes minimal.
 | Tracing | `trace`, `trace-to-file` | `dbg`, trace BIFs | ✅ Complete |
 | **Supervision trees** | `supervtree`, `parent` | Observer supervision view | ✅ **Complete** (local + remote) |
 | Message queue depth | - | `message_queue_len` | ❌ Needs core API |
-| Link inspection | `links` | `links`, `monitors` | ⏳ **Priority 8** |
-| Live refresh (simple) | `watch` | - | ⏳ Priority 5 |
+| Link inspection | `links` | `links`, `monitors` | 📋 Backlog |
+| Live refresh (simple) | `watch` | - | 📋 Backlog |
 | Memory usage | - | `memory` | ❌ Needs core API |
 | Message count/rate | `top` Msg/s column | `reductions` | ✅ **Complete** (core + shell) |
+
+---
+
+## Backlog / Future Ideas
+
+These items are deferred indefinitely. They may be revisited in a future phase.
+
+### Supervision Tree Panel in `top` TUI
+- Add a second panel showing tree structure
+- Tab key to switch between actors list and tree view
+- Highlight selected actor's position in tree
+
+### Watch Mode
+- `watch actors` - refresh actor list every N seconds
+- `watch stats` - continuous system stats
+- `watch pg <group>` - monitor process group membership
+- `watch tree` - monitor supervision tree changes
+- Configurable refresh interval (default 2s)
+- Press 'q' or Ctrl+C to exit watch mode
+
+### Enhanced Actor Inspection
+- **`whereis <name>`** - Quick lookup of registered name to actor ID (Erlang equivalent: `whereis/1`)
+- **`links <actor>`** - Show supervisor and children for an actor in one view (mostly covered by `supervtree` and `parent`)
+
+### Documentation
+- Clarify `tree` vs `supervtree` naming (`tree` = process groups, `supervtree` = supervision hierarchy)
 
 ---
 

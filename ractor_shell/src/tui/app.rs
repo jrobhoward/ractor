@@ -13,7 +13,7 @@ use ratatui::{backend::CrosstermBackend, Terminal};
 use std::io;
 use std::time::{Duration, Instant};
 
-use crate::introspection::collect_system_info;
+use crate::introspection::SystemInfoCollector;
 use crate::protocol::{RemoteActorMetrics, ShellProtocolMessage, SystemInfo};
 use crate::DEFAULT_RPC_TIMEOUT;
 
@@ -113,6 +113,8 @@ pub struct App {
     pub sysinfo_refresh_interval: Duration,
     /// Last system info refresh time
     pub last_sysinfo_refresh: Instant,
+    /// Cached system info collector for accurate CPU% (local mode only)
+    sysinfo_collector: SystemInfoCollector,
 }
 
 impl Default for App {
@@ -141,6 +143,7 @@ impl App {
             system_info: None,
             sysinfo_refresh_interval: Duration::from_secs(5),
             last_sysinfo_refresh: Instant::now() - Duration::from_secs(10), // Force immediate refresh
+            sysinfo_collector: SystemInfoCollector::new(),
         }
     }
 
@@ -166,6 +169,7 @@ impl App {
             system_info: None,
             sysinfo_refresh_interval: Duration::from_secs(5),
             last_sysinfo_refresh: Instant::now() - Duration::from_secs(10), // Force immediate refresh
+            sysinfo_collector: SystemInfoCollector::new(),
         }
     }
 
@@ -323,8 +327,8 @@ impl App {
                 }
             }
         } else {
-            // Local mode: collect system info directly
-            self.system_info = Some(collect_system_info());
+            // Local mode: use cached collector for accurate CPU%
+            self.system_info = Some(self.sysinfo_collector.refresh());
         }
 
         self.last_sysinfo_refresh = Instant::now();

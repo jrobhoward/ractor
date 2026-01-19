@@ -148,6 +148,8 @@ pub struct IntrospectionState {
     tracing_handle: Option<TracingHandle>,
     /// Remote monitoring state
     monitoring: MonitoringState,
+    /// Cached system info collector (for accurate CPU% measurement)
+    sysinfo_collector: SystemInfoCollector,
 }
 
 /// Arguments for spawning an IntrospectionActor
@@ -201,6 +203,7 @@ impl Actor for IntrospectionActor {
             subscriptions: HashMap::new(),
             tracing_handle: args.tracing_handle,
             monitoring: MonitoringState::new(),
+            sysinfo_collector: SystemInfoCollector::new(),
         })
     }
 
@@ -572,7 +575,7 @@ impl Actor for IntrospectionActor {
             }
 
             ShellProtocolMessage::GetSystemInfo(reply) => {
-                let info = collect_system_info();
+                let info = state.sysinfo_collector.refresh();
                 let _ = reply.send(info);
             }
         }
@@ -945,90 +948,148 @@ pub(crate) fn collect_actor_metrics() -> Vec<RemoteActorMetrics> {
     all_actors
 }
 
-/// Collect system and process information for the `top` TUI header.
+/// Collector for system/process information that caches the sysinfo::System instance.
 ///
-/// When the `sysinfo` feature is enabled, this returns real process stats.
-/// Otherwise, it returns a minimal struct with just hostname, exe name, and PID.
+/// CPU usage calculation requires two measurements to compute a delta, so we must
+/// keep the System instance alive between refreshes. Creating a new System each time
+/// would always return 0.0% CPU.
 #[cfg(feature = "sysinfo")]
-pub(crate) fn collect_system_info() -> SystemInfo {
-    use sysinfo::{MemoryRefreshKind, ProcessRefreshKind, RefreshKind, System};
+pub struct SystemInfoCollector {
+    sys: sysinfo::System,
+    pid: sysinfo::Pid,
+    hostname: String,
+    exe_name: String,
+    total_memory_bytes: u64,
+}
 
-    // Create a System instance with minimal refresh (just what we need)
-    let mut sys = System::new_with_specifics(
-        RefreshKind::new()
-            .with_processes(ProcessRefreshKind::everything())
-            .with_memory(MemoryRefreshKind::everything()),
-    );
+#[cfg(feature = "sysinfo")]
+impl SystemInfoCollector {
+    /// Create a new collector. The first call to `refresh()` will return 0% CPU
+    /// because there's no baseline yet. Subsequent calls will return accurate CPU%.
+    pub fn new() -> Self {
+        use sysinfo::{MemoryRefreshKind, ProcessRefreshKind, RefreshKind, System};
 
-    // Get current process info
-    let pid = std::process::id();
-    let sysinfo_pid = sysinfo::Pid::from_u32(pid);
+        let mut sys = System::new_with_specifics(
+            RefreshKind::new()
+                .with_processes(ProcessRefreshKind::everything())
+                .with_memory(MemoryRefreshKind::everything()),
+        );
 
-    // Refresh the specific process
-    sys.refresh_processes_specifics(
-        sysinfo::ProcessesToUpdate::Some(&[sysinfo_pid]),
-        true,
-        ProcessRefreshKind::everything(),
-    );
+        let pid = sysinfo::Pid::from_u32(std::process::id());
 
-    let (cpu_percent, memory_bytes, process_uptime_secs, thread_count) =
-        if let Some(process) = sys.process(sysinfo_pid) {
-            (
-                process.cpu_usage(),
-                process.memory(),
-                process.run_time(),
-                // sysinfo doesn't expose thread count directly on all platforms
-                // We'll use 0 as a placeholder if not available
-                0usize,
-            )
-        } else {
-            (0.0, 0, 0, 0)
-        };
+        // Do initial refresh to establish baseline for CPU calculation
+        // Note: Must use ProcessesToUpdate::All for CPU% to work correctly.
+        // ProcessesToUpdate::Some doesn't properly track CPU timing data.
+        sys.refresh_processes_specifics(
+            sysinfo::ProcessesToUpdate::All,
+            true,
+            ProcessRefreshKind::everything(),
+        );
 
-    // Get hostname
-    let hostname = System::host_name().unwrap_or_else(|| "unknown".to_string());
+        let hostname = System::host_name().unwrap_or_else(|| "unknown".to_string());
+        let exe_name = std::env::current_exe()
+            .ok()
+            .and_then(|p| p.file_name().map(|s| s.to_string_lossy().to_string()))
+            .unwrap_or_else(|| "unknown".to_string());
+        let total_memory_bytes = sys.total_memory();
 
-    // Get executable name
-    let exe_name = std::env::current_exe()
-        .ok()
-        .and_then(|p| p.file_name().map(|s| s.to_string_lossy().to_string()))
-        .unwrap_or_else(|| "unknown".to_string());
+        Self {
+            sys,
+            pid,
+            hostname,
+            exe_name,
+            total_memory_bytes,
+        }
+    }
 
-    SystemInfo {
-        hostname,
-        exe_name,
-        pid,
-        cpu_percent,
-        memory_bytes,
-        process_uptime_secs,
-        thread_count,
-        total_memory_bytes: sys.total_memory(),
-        ractor_shell_version: env!("CARGO_PKG_VERSION").to_string(),
+    /// Refresh and return current system info.
+    ///
+    /// CPU% is calculated as delta since last refresh, so it reflects usage
+    /// over the refresh interval (not instantaneous).
+    pub fn refresh(&mut self) -> SystemInfo {
+        use sysinfo::ProcessRefreshKind;
+
+        // Must use ProcessesToUpdate::All for CPU% to work correctly.
+        // ProcessesToUpdate::Some doesn't properly track CPU timing data in sysinfo 0.32.
+        // This is more expensive but necessary for accurate CPU measurement.
+        self.sys.refresh_processes_specifics(
+            sysinfo::ProcessesToUpdate::All,
+            true,
+            ProcessRefreshKind::everything(),
+        );
+
+        let (cpu_percent, memory_bytes, process_uptime_secs, thread_count) =
+            if let Some(process) = self.sys.process(self.pid) {
+                (
+                    process.cpu_usage(),
+                    process.memory(),
+                    process.run_time(),
+                    0usize, // sysinfo doesn't expose thread count on all platforms
+                )
+            } else {
+                (0.0, 0, 0, 0)
+            };
+
+        SystemInfo {
+            hostname: self.hostname.clone(),
+            exe_name: self.exe_name.clone(),
+            pid: std::process::id(),
+            cpu_percent,
+            memory_bytes,
+            process_uptime_secs,
+            thread_count,
+            total_memory_bytes: self.total_memory_bytes,
+            ractor_shell_version: env!("CARGO_PKG_VERSION").to_string(),
+        }
     }
 }
 
-/// Fallback when sysinfo feature is disabled - returns minimal info
+#[cfg(feature = "sysinfo")]
+impl Default for SystemInfoCollector {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Fallback SystemInfoCollector when sysinfo feature is disabled.
 #[cfg(not(feature = "sysinfo"))]
-pub(crate) fn collect_system_info() -> SystemInfo {
-    let hostname = hostname::get()
-        .map(|h| h.to_string_lossy().to_string())
-        .unwrap_or_else(|_| "unknown".to_string());
+pub struct SystemInfoCollector {
+    hostname: String,
+    exe_name: String,
+}
 
-    let exe_name = std::env::current_exe()
-        .ok()
-        .and_then(|p| p.file_name().map(|s| s.to_string_lossy().to_string()))
-        .unwrap_or_else(|| "unknown".to_string());
+#[cfg(not(feature = "sysinfo"))]
+impl SystemInfoCollector {
+    pub fn new() -> Self {
+        let hostname = hostname::get()
+            .map(|h| h.to_string_lossy().to_string())
+            .unwrap_or_else(|_| "unknown".to_string());
+        let exe_name = std::env::current_exe()
+            .ok()
+            .and_then(|p| p.file_name().map(|s| s.to_string_lossy().to_string()))
+            .unwrap_or_else(|| "unknown".to_string());
+        Self { hostname, exe_name }
+    }
 
-    SystemInfo {
-        hostname,
-        exe_name,
-        pid: std::process::id(),
-        cpu_percent: 0.0,
-        memory_bytes: 0,
-        process_uptime_secs: 0,
-        thread_count: 0,
-        total_memory_bytes: 0,
-        ractor_shell_version: env!("CARGO_PKG_VERSION").to_string(),
+    pub fn refresh(&mut self) -> SystemInfo {
+        SystemInfo {
+            hostname: self.hostname.clone(),
+            exe_name: self.exe_name.clone(),
+            pid: std::process::id(),
+            cpu_percent: 0.0,
+            memory_bytes: 0,
+            process_uptime_secs: 0,
+            thread_count: 0,
+            total_memory_bytes: 0,
+            ractor_shell_version: env!("CARGO_PKG_VERSION").to_string(),
+        }
+    }
+}
+
+#[cfg(not(feature = "sysinfo"))]
+impl Default for SystemInfoCollector {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
