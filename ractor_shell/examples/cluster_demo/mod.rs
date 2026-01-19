@@ -13,5 +13,3 @@ pub mod raft_supervisor;
 
 // Re-export commonly used items for convenience
 pub use actors::{DemoActor, DemoMessage, DynamicDemoActor};
-pub use raft::{RaftConfig, RaftNode, RAFT_CLUSTER_GROUP};
-pub use raft_supervisor::{RaftSupervisor, RaftSupervisorArgs};

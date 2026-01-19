@@ -240,6 +240,19 @@
   - Show bytes sent/received, pending message counts
   - Erlang equivalent: `inet:getstat/1`
 
+- [ ] **Handle stale cluster connections gracefully**
+  - **Problem**: Shell stores `ActorRef<ShellProtocolMessage>` to remote introspection actors.
+    When the underlying ractor_cluster connection drops (network hiccup, node restart),
+    the ActorRef becomes stale but the shell has no notification. Subsequent sends fail with `SendErr`.
+  - **Current Workaround**: Added `reconnect <node>` command to manually refresh connections.
+  - **Potential Solutions**:
+    1. **Auto-reconnect on SendErr**: Detect the error, reconnect, and retry the operation automatically
+    2. **Periodic health checks**: Background task pings connected nodes to detect staleness early
+    3. **Connection event monitoring**: Subscribe to ractor_cluster connection events (may need core support)
+    4. **Retry wrapper**: Wrap all remote operations with retry-on-reconnect logic
+  - **Investigation needed**: Check if ractor_cluster provides connection status callbacks or events
+  - **Files**: `lib.rs` (cmd_reconnect, connected_nodes), `error.rs` (MessagingError)
+
 ---
 
 ## Priority 7: Code Cleanup

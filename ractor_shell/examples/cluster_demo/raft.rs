@@ -285,17 +285,6 @@ impl RaftState {
     }
 }
 
-/// Response to a vote request (kept for test compatibility)
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct VoteResponse {
-    /// Current term of the voter
-    pub term: u64,
-    /// Whether vote was granted
-    pub vote_granted: bool,
-    /// Name of the voter
-    pub voter_name: String,
-}
-
 // ==================== Raft Node Actor ====================
 
 /// Actor that participates in Raft leader election.

@@ -65,7 +65,9 @@ pub enum ShellError {
     SpawnError(#[from] ractor::SpawnErr),
 
     /// Failed to send a message to an actor.
-    #[error("Failed to send message: {0}")]
+    #[error(
+        "Failed to send message: {0}. Connection may be stale - try 'reconnect <node>' to refresh."
+    )]
     MessagingError(String),
 
     /// No introspection actor found on remote node.

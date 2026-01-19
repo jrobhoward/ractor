@@ -28,18 +28,27 @@ Wait for "All nodes started" message.
 
 ---
 
-## 2. Connect to a Remote Node
+## 2. Connect to the Remote Nodes
 
-The shell starts automatically after the cluster is ready. Connect to a node:
+The shell starts automatically after the cluster is ready. Connect to all three nodes so they're available for later tracing:
 
 ```
 ractor@local > connect 127.0.0.1:9001
 ✓ Connected to 127.0.0.1:9001
 
+ractor@127.0.0.1:9001 > connect 127.0.0.1:9002
+✓ Connected to 127.0.0.1:9002
+
+ractor@127.0.0.1:9002 > connect 127.0.0.1:9003
+✓ Connected to 127.0.0.1:9003
+
+ractor@127.0.0.1:9003 > use 9001
+✓ Switched to 127.0.0.1:9001
+
 ractor@127.0.0.1:9001 >
 ```
 
-The prompt changes to show you're connected to the remote node.
+The prompt changes to show the currently active connection. Use `use <port>` to switch between connected nodes.
 
 ---
 
@@ -167,16 +176,22 @@ ractor@127.0.0.1:9001 > info raft_node
 
 **Important**: The Raft actors run in the cluster node processes, not the shell. Use `trace remote` to capture their events.
 
-### Subscribe to remote traces from a node:
-```
-ractor@127.0.0.1:9001 > trace remote 127.0.0.1:9001 *raft*
-✓ Subscribed to traces from 127.0.0.1:9001 matching: raft*
-```
-
-### Set minimum level to INFO (avoid noisy TRACE/DEBUG):
+### Set minimum level to INFO first (avoid noisy TRACE/DEBUG):
 ```
 ractor@127.0.0.1:9001 > trace level INFO
 ✓ Minimum trace level set to: INFO
+```
+
+### Subscribe to remote traces from all nodes:
+```
+ractor@127.0.0.1:9001 > trace remote 127.0.0.1:9001 *raft*
+✓ Subscribed to traces from 127.0.0.1:9001 matching: raft*
+
+ractor@127.0.0.1:9001 > trace remote 127.0.0.1:9002 *raft*
+✓ Subscribed to traces from 127.0.0.1:9002 matching: raft*
+
+ractor@127.0.0.1:9001 > trace remote 127.0.0.1:9003 *raft*
+✓ Subscribed to traces from 127.0.0.1:9003 matching: raft*
 ```
 
 This will capture:
@@ -184,12 +199,6 @@ This will capture:
 - Role transitions
 - Vote requests/responses
 - Step-down events
-
-### Subscribe to multiple nodes:
-```
-ractor@127.0.0.1:9001 > trace remote 127.0.0.1:9002 *raft*
-ractor@127.0.0.1:9001 > trace remote 127.0.0.1:9003 *raft*
-```
 
 ### Alternative: trace by node name field (matches field values):
 ```
@@ -227,7 +236,7 @@ Monitored actors:
 
 ## 9. Trigger Leader Election
 
-### Find and connect to the current leader:
+### Find and switch to the current leader:
 
 First, check which node is leader:
 ```
@@ -235,11 +244,19 @@ ractor@127.0.0.1:9001 > call raft_node GetLeader {}
 "node_b"
 ```
 
-If node_b is leader, connect to it:
+Switch to the leader node (we connected to all nodes in step 2):
 ```
-ractor@127.0.0.1:9001 > connect 127.0.0.1:9002
-✓ Connected to 127.0.0.1:9002
+# If node_b is leader:
+ractor@127.0.0.1:9001 > use 9002
+✓ Switched to 127.0.0.1:9002
 
+# Or if node_c is leader:
+ractor@127.0.0.1:9001 > use 9003
+✓ Switched to 127.0.0.1:9003
+```
+
+Verify you're on the leader:
+```
 ractor@127.0.0.1:9002 > call raft_node IsLeader {}
 true
 ```
@@ -278,13 +295,21 @@ ractor@127.0.0.1:9002 > call raft_node GetLeader {}
 
 ### Option A: Stop via shell command
 
+First, verify connectivity to the node:
+```
+ractor@127.0.0.1:9001 > ping 127.0.0.1:9001
+Pong from 127.0.0.1:9001 in 2ms
+```
+
 Stop the raft_node actor (this will be restarted by its supervisor):
 ```
 ractor@127.0.0.1:9001 > stop raft_node
-✓ Actor stopped: raft_node
+✓ Sent stop signal to 'raft_node' on 127.0.0.1:9001
 ```
 
-### Option B: Kill a node process
+**Note**: If you get "Failed to send message: SendErr", the cluster connection may have been dropped. Use `reconnect <node>` to refresh the connection, or try Option B.
+
+### Option B: Kill a node process (recommended)
 
 From another terminal:
 ```bash
@@ -381,6 +406,7 @@ pkill -f cluster_demo
 | Command | Description |
 |---------|-------------|
 | `connect <host:port>` | Connect to remote node |
+| `reconnect <node>` | Refresh stale connection |
 | `actors` / `a` | List all actors |
 | `registry` / `r` | List registered actors |
 | `info <actor>` / `i` | Show actor details |
@@ -422,3 +448,8 @@ pkill -f cluster_demo
 - Default timeout is 5 seconds
 - Check that the target actor is running: `registry`
 - Check actor status: `info <actor>`
+
+### "Failed to send message: SendErr"
+- The cluster connection may have dropped or the actor reference became stale
+- Use `reconnect <node>` to refresh the connection
+- Example: `reconnect 127.0.0.1:9002`

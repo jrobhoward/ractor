@@ -18,6 +18,7 @@ pub struct DemoActor;
 
 /// Messages for the simple demo actor.
 #[derive(Debug)]
+#[allow(dead_code)] // Example code - variants available for demo use
 pub enum DemoMessage {
     /// Simple ping message
     Ping,
@@ -188,10 +189,12 @@ impl Actor for DynamicDemoActor {
 ///
 /// This actor is used for demonstrating actor monitoring and supervision.
 /// Send `PanickyMessage::Panic` to trigger a panic.
+#[allow(dead_code)] // Example code - available for monitoring demos
 pub struct PanickyActor;
 
 /// Messages for the panicky actor.
 #[derive(Debug)]
+#[allow(dead_code)] // Example code - available for monitoring demos
 pub enum PanickyMessage {
     /// Trigger a panic
     Panic,

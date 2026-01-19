@@ -121,7 +121,6 @@ pub(crate) struct RemoteTraceSubscription {
     /// Subscription ID from the remote node
     subscription_id: SubscriptionId,
     /// Pattern being traced
-    #[allow(dead_code)]
     pattern: String,
     /// Background polling task
     _poll_task: JoinHandle<()>,
@@ -232,6 +231,7 @@ impl ShellState {
             ShellCommand::Stop { actor } => self.cmd_stop(actor).await,
             ShellCommand::Connect { host } => self.cmd_connect(host).await,
             ShellCommand::Disconnect { node } => self.cmd_disconnect(node).await,
+            ShellCommand::Reconnect { node } => self.cmd_reconnect(node).await,
             ShellCommand::Nodes => self.cmd_nodes().await,
             ShellCommand::Use { node } => self.cmd_use(node).await,
             ShellCommand::Cluster { subcommand } => self.cmd_cluster(subcommand).await,
@@ -315,8 +315,12 @@ impl ShellState {
                 }
             }
             None => {
-                // List active traces
-                if !handle.is_active() {
+                // List active traces (local and remote)
+                let remote_subs = self.remote_trace_subscriptions.lock().await;
+                let has_local = handle.is_active();
+                let has_remote = !remote_subs.is_empty();
+
+                if !has_local && !has_remote {
                     println!(
                         "{}",
                         "No active traces. Use 'trace <pattern>' to start tracing.".bright_black()
@@ -333,11 +337,27 @@ impl ShellState {
                     );
                     println!("  {}  - stop all tracing", "trace off".cyan());
                 } else {
-                    println!("{}", "Active trace patterns:".bold());
-                    for p in handle.patterns() {
-                        println!("  {}", p.cyan());
+                    if has_local {
+                        println!("{}", "Local trace patterns:".bold());
+                        for p in handle.patterns() {
+                            println!("  {}", p.cyan());
+                        }
+                        println!();
                     }
-                    println!();
+
+                    if has_remote {
+                        println!("{}", "Remote trace subscriptions:".bold());
+                        for sub in remote_subs.iter() {
+                            println!(
+                                "  {} {} (subscription {})",
+                                sub.node.cyan(),
+                                sub.pattern.bright_black(),
+                                sub.subscription_id
+                            );
+                        }
+                        println!();
+                    }
+
                     println!("{}", "Minimum level:".bold());
                     println!("  {}", handle.min_level().to_string().cyan());
                     println!();
@@ -2466,6 +2486,29 @@ impl ShellState {
         }
     }
 
+    async fn cmd_reconnect(&mut self, node: String) -> ShellResult<()> {
+        // Remove the stale connection if it exists
+        let was_current = self.current_node.as_ref() == Some(&node);
+        if self.connected_nodes.remove(&node).is_some() {
+            println!(
+                "{} Disconnected stale connection to {}",
+                "→".bright_black(),
+                node
+            );
+        }
+
+        // Reconnect
+        self.cmd_connect(node.clone()).await?;
+
+        // Restore as current node if it was before
+        if was_current {
+            self.current_node = Some(node.clone());
+            println!("{} Restored {} as current node", "✓".green(), node);
+        }
+
+        Ok(())
+    }
+
     async fn cmd_nodes(&self) -> ShellResult<()> {
         if self.connected_nodes.is_empty() {
             println!("No connected nodes");
@@ -3518,6 +3561,8 @@ pub enum ShellCommand {
     Connect { host: String },
     /// Disconnect from a remote node. Usage: `disconnect <node>`
     Disconnect { node: String },
+    /// Reconnect to a remote node (disconnect + connect). Usage: `reconnect <node>`
+    Reconnect { node: String },
     /// List connected nodes
     Nodes,
     /// Switch context to a remote node. Usage: `use <node>` or `use local`
@@ -3702,6 +3747,17 @@ impl ShellCommand {
                     });
                 }
                 Ok(ShellCommand::Disconnect {
+                    node: parts[1].to_string(),
+                })
+            }
+            "reconnect" => {
+                if parts.len() < 2 {
+                    return Err(ShellError::MissingArgument {
+                        command: "reconnect",
+                        requirement: "<node_name>",
+                    });
+                }
+                Ok(ShellCommand::Reconnect {
                     node: parts[1].to_string(),
                 })
             }
