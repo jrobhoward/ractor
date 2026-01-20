@@ -409,6 +409,5 @@ ractor@local > call my_actor GetValue {}
 
 ## See Also
 
-- `examples/dynamic_actor.rs` - Complete DynamicMessage example
-- `src/raft.rs` - Schema-enabled typed message example (RaftMessage)
-- `src/schema_registry.rs` - Schema registration implementation
+- [`examples/cluster_demo/raft.rs`](../examples/cluster_demo/raft.rs) - Schema-enabled typed message example (RaftMessage)
+- [`src/schema_registry.rs`](../src/schema_registry.rs) - Schema registration implementation

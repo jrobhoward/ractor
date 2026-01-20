@@ -73,47 +73,36 @@ ractor@127.0.0.1:9001 > call raft_node GetPeers {}
 ["node_b", "node_c"]
 ```
 
-## Examples
+## Example
 
-The following examples demonstrate different ractor_shell features:
-
-| Example | Command | Description |
-|---------|---------|-------------|
-| **demo** | `cargo run --example demo -p ractor_shell` | Basic shell with simple actors. Good starting point for learning shell commands. |
-| **dynamic_actor** | `cargo run --example dynamic_actor -p ractor_shell` | Shows how actors can receive JSON messages via `DynamicMessage`. Demonstrates `send` and `call` commands. |
-| **monitoring_demo** | `cargo run --example monitoring_demo -p ractor_shell` | Actor lifecycle monitoring with `monitor`, `unmonitor`, and `monitors` commands. |
-| **cluster_node** | `cargo run --example cluster_node -p ractor_shell -- --port 9001 --name node_a` | Cluster node with Raft leader election. Use with `test_cluster.sh` for multi-node testing. |
-
-### Example Details
-
-#### demo.rs
-The simplest example - spawns 3 named actors in a process group and starts the shell. Use this to explore basic commands like `actors`, `registry`, `pg members`, and `info`.
-
-#### dynamic_actor.rs
-Demonstrates the `DynamicMessage` interface that allows actors to receive arbitrary JSON from the shell. The example actor has a counter that can be incremented, reset, and queried:
+The [`cluster_demo`](examples/cluster_demo.rs) example provides a complete Raft cluster with leader election and an interactive shell:
 
 ```bash
-send dynamic_actor {"command": "increment"}
-call dynamic_actor {"command": "get_counter"}
-call dynamic_actor {"command": "add", "amount": 5}
+# Start a 3-node cluster with interactive shell
+./ractor_shell/scripts/test_cluster.sh
+
+# Or run components manually:
+
+# Start a cluster node
+cargo run --example cluster_demo -p ractor_shell -- node --port 9001 --name node_a
+
+# Start additional nodes (connect to first)
+cargo run --example cluster_demo -p ractor_shell -- node --port 9002 --name node_b --peer 127.0.0.1:9001
+
+# Start the shell separately
+cargo run --example cluster_demo -p ractor_shell -- shell
 ```
 
-#### monitoring_demo.rs
-Shows actor lifecycle monitoring. Start monitoring actors to see when they stop or fail:
+The example includes:
+- **Raft leader election** - Nodes elect a leader and maintain heartbeats
+- **Schema-enabled typed messages** - Query Raft status with `call raft_node GetStatus {}`
+- **Demo actors** - Simple actors and a `DynamicMessage` actor for testing
+- **Full introspection** - `IntrospectionActor` enables remote shell queries
 
-```bash
-monitor demo_actor_1
-monitors              # List monitored actors
-stop demo_actor_1     # See the stop event
-```
-
-#### cluster_node.rs
-A full cluster node with:
-- `NodeServer` for cluster networking
-- `IntrospectionActor` for shell connectivity
-- `RaftNode` for leader election
-
-Can be started manually or via the `test_cluster.sh` script.
+See [`examples/cluster_demo/`](examples/cluster_demo/) for the implementation:
+- [`raft.rs`](examples/cluster_demo/raft.rs) - Raft node implementation
+- [`raft_supervisor.rs`](examples/cluster_demo/raft_supervisor.rs) - Supervision tree
+- [`actors.rs`](examples/cluster_demo/actors.rs) - Demo actors
 
 ## Raft Cluster Demo
 
@@ -262,8 +251,6 @@ ractor@local > stop my_actor
 ✓ Sent stop signal to 'my_actor'
 [14:24:12.456] ▼ STOPPED my_actor (0.1)
 ```
-
-See [MONITORING.md](docs/MONITORING.md) for details.
 
 ## Configuration
 
@@ -471,7 +458,6 @@ flowchart TB
 |----------|-------------|
 | [ARCHITECTURE.md](docs/ARCHITECTURE.md) | Internal architecture and design decisions |
 | [DYNAMIC_MESSAGES.md](docs/DYNAMIC_MESSAGES.md) | How to create actors that receive JSON from the shell |
-| [MONITORING.md](docs/MONITORING.md) | Actor lifecycle monitoring guide |
 | [UX_FEATURES.md](docs/UX_FEATURES.md) | Tab completion and command aliases |
 | [TESTING.md](docs/TESTING.md) | Testing conventions for contributors |
 | [SHOWCASE.md](docs/SHOWCASE.md) | Feature walkthrough with the Raft cluster demo |

@@ -298,7 +298,7 @@ sequenceDiagram
 
 ### Protocol Messages
 
-The shell protocol is defined in `protocol.rs`:
+The shell protocol is defined in [`protocol.rs`](../src/protocol.rs):
 
 ```rust
 pub enum ShellProtocolMessage {

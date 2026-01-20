@@ -35,9 +35,9 @@ mod foo_tests;
 
 Test files follow the pattern: `{parent_module_name}_tests.rs`
 
-- `monitor.rs` → `monitor/monitor_tests.rs`
-- `dynamic.rs` → `dynamic/dynamic_tests.rs`
-- `lib.rs` → `lib_tests.rs` (special case: lives in `src/` directly)
+- `monitor.rs` → [`monitor/monitor_tests.rs`](../src/monitor/monitor_tests.rs)
+- `dynamic.rs` → [`dynamic/dynamic_tests.rs`](../src/dynamic/dynamic_tests.rs)
+- [`lib.rs`](../src/lib.rs) → [`lib_tests.rs`](../src/lib_tests.rs) (special case: lives in `src/` directly)
 
 ## Test File Structure
 
@@ -149,7 +149,7 @@ assert!(result.is_ok());  // Only use when the Ok value doesn't matter
 
 ## Integration Tests
 
-Integration tests live in `tests/` directory and test public APIs:
+Integration tests live in [`tests/`](../tests/) directory and test public APIs:
 
 ```
 ractor_shell/
@@ -195,7 +195,7 @@ async fn DynamicMessage___call_with_ping_command___returns_success_response() {
 
 Property-based tests use `proptest` to generate random inputs and verify invariants.
 
-Location: `tests/proptest_tests.rs`
+Location: [`tests/proptest_tests.rs`](../tests/proptest_tests.rs)
 
 ```rust
 #![allow(non_snake_case)]
@@ -226,7 +226,7 @@ cargo test --package ractor_shell --test proptest_tests
 
 ## Benchmarks
 
-Benchmarks use `criterion` and live in `benches/shell_bench.rs`.
+Benchmarks use `criterion` and live in [`benches/shell_bench.rs`](../benches/shell_bench.rs).
 
 ```rust
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
